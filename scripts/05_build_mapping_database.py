@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
@@ -11,6 +11,7 @@ from common import (
     compute_tfidf,
     ensure_output_dir,
     load_cleaned_or_build,
+    resolve_latest_output_path,
     save_workbook,
     split_words,
     stable_id,
@@ -18,6 +19,7 @@ from common import (
 
 
 def read_excel_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
+    path = resolve_latest_output_path(path)
     if not path.exists():
         return pd.DataFrame()
     try:
@@ -49,6 +51,11 @@ def collect_sentiment_data(output_dir: Path) -> pd.DataFrame:
 def collect_topic_data(output_dir: Path) -> pd.DataFrame:
     topic_path = output_dir / "BERTopic主题聚类结果.xlsx"
     return read_excel_sheet(topic_path, "主题汇总")
+
+
+def rows_to_dataframe(rows: list[dict]) -> pd.DataFrame:
+    """把行数据安全转换为 DataFrame，避免直接用 DataFrame 做布尔判断。"""
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
 def main() -> None:
@@ -134,7 +141,7 @@ def main() -> None:
                 "功能名称": rule["function"],
                 "功能类别": rule["category"],
                 "功能描述": rule["description"],
-                "设计目标": f"响应"{rule['category']}"，提升{product_name}使用体验。",
+                "设计目标": f"响应“{rule['category']}”，提升{product_name}使用体验。",
                 "优先级": 1 if negative_count > 0 else 2,
             })
 
@@ -143,7 +150,7 @@ def main() -> None:
                 "structure_id": structure_id,
                 "结构名称": rule["structure"],
                 "结构类型": rule["category"],
-                "结构描述": f"用于实现"{rule['function']}"的关键结构配置。",
+                "结构描述": f"用于实现“{rule['function']}”的关键结构配置。",
             })
 
         req_func_rows.append({
@@ -182,12 +189,12 @@ def main() -> None:
     output_path = output_dir / f"{product_name}_需求功能映射数据库.xlsx"
     save_workbook(output_path, {
         "用户需求表": pd.DataFrame(requirement_rows).sort_values("重要度", ascending=False) if requirement_rows else pd.DataFrame(),
-        "产品功能表": pd.DataFrame(function_rows) or pd.DataFrame(),
-        "产品结构表": pd.DataFrame(structure_rows) or pd.DataFrame(),
-        "需求功能映射": pd.DataFrame(req_func_rows) or pd.DataFrame(),
-        "功能结构映射": pd.DataFrame(func_struct_rows) or pd.DataFrame(),
-        "主题需求映射": pd.DataFrame(topic_req_rows) or pd.DataFrame(),
-        "设计机会点": pd.DataFrame(opportunity_rows) or pd.DataFrame(),
+        "产品功能表": rows_to_dataframe(function_rows),
+        "产品结构表": rows_to_dataframe(structure_rows),
+        "需求功能映射": rows_to_dataframe(req_func_rows),
+        "功能结构映射": rows_to_dataframe(func_struct_rows),
+        "主题需求映射": rows_to_dataframe(topic_req_rows),
+        "设计机会点": rows_to_dataframe(opportunity_rows),
     })
 
     print(f"产品名称：{product_name}")
