@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
-from common import ensure_output_dir
+from common import ensure_output_dir, resolve_latest_output_path
 
 
 # =========================
@@ -42,14 +42,14 @@ def ensure_previous_outputs(output_dir: Path, product_name: str) -> None:
     scheme_path = output_dir / f"{product_name}产品设计方案.txt"
     root = Path(__file__).resolve().parents[1]
 
-    if not mapping_path.exists():
+    if not resolve_latest_output_path(mapping_path).exists():
         subprocess.run(
             [sys.executable, str(root / "scripts" / "05_build_mapping_database.py"), "--output-dir", str(output_dir), "--product-name", product_name],
             cwd=root,
             check=True,
         )
 
-    if not scheme_path.exists():
+    if not resolve_latest_output_path(scheme_path).exists():
         subprocess.run(
             [sys.executable, str(root / "scripts" / "07_generate_design_scheme.py"), "--output-dir", str(output_dir), "--product-name", product_name],
             cwd=root,
@@ -58,6 +58,7 @@ def ensure_previous_outputs(output_dir: Path, product_name: str) -> None:
 
 
 def read_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
+    path = resolve_latest_output_path(path)
     if not path.exists():
         return pd.DataFrame()
     try:

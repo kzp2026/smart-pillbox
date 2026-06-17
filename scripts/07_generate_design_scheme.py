@@ -8,10 +8,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from common import ensure_output_dir
+from common import ensure_output_dir, resolve_latest_output_path
 
 
 def read_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
+    path = resolve_latest_output_path(path)
     if not path.exists():
         return pd.DataFrame()
     try:
@@ -22,8 +23,9 @@ def read_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
 
 def ensure_mapping_database(output_dir: Path, product_name: str) -> Path:
     mapping_path = output_dir / f"{product_name}_需求功能映射数据库.xlsx"
-    if mapping_path.exists():
-        return mapping_path
+    latest_mapping_path = resolve_latest_output_path(mapping_path)
+    if latest_mapping_path.exists():
+        return latest_mapping_path
     script_path = Path(__file__).resolve().parent / "05_build_mapping_database.py"
     subprocess.run(
         [sys.executable, str(script_path), "--output-dir", str(output_dir), "--product-name", product_name],
