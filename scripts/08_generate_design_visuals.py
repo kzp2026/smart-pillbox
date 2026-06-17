@@ -1,6 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
+import base64
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,16 +16,6 @@ from common import ensure_output_dir
 # =========================
 # 1. 视觉输出路径与基础配置
 # =========================
-
-IMAGE_FILENAMES = {
-    "render": "智能药盒设计效果图.png",
-    "three_view": "智能药盒三视图.png",
-    "exploded": "智能药盒爆炸图.png",
-    "scenario": "智能药盒场景使用效果图.png",
-    "board": "智能药盒产品设计展板.png",
-}
-
-HIGH_FIDELITY_THRESHOLD_BYTES = 500_000
 
 PALETTE = {
     "bg": "#F7FAFC",
@@ -45,29 +37,27 @@ PALETTE = {
 # 2. 数据读取与字体工具
 # =========================
 
-def ensure_previous_outputs(output_dir: Path) -> None:
-    """如果核心设计数据不存在，自动补跑前序阶段。"""
-    mapping_path = output_dir / "智能药盒需求功能映射数据库.xlsx"
-    scheme_path = output_dir / "智能药盒产品设计方案.txt"
+def ensure_previous_outputs(output_dir: Path, product_name: str) -> None:
+    mapping_path = output_dir / f"{product_name}_需求功能映射数据库.xlsx"
+    scheme_path = output_dir / f"{product_name}产品设计方案.txt"
     root = Path(__file__).resolve().parents[1]
 
     if not mapping_path.exists():
         subprocess.run(
-            [sys.executable, str(root / "scripts" / "05_build_mapping_database.py"), "--output-dir", str(output_dir)],
+            [sys.executable, str(root / "scripts" / "05_build_mapping_database.py"), "--output-dir", str(output_dir), "--product-name", product_name],
             cwd=root,
             check=True,
         )
 
     if not scheme_path.exists():
         subprocess.run(
-            [sys.executable, str(root / "scripts" / "07_generate_design_scheme.py"), "--output-dir", str(output_dir)],
+            [sys.executable, str(root / "scripts" / "07_generate_design_scheme.py"), "--output-dir", str(output_dir), "--product-name", product_name],
             cwd=root,
             check=True,
         )
 
 
 def read_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
-    """读取 Excel Sheet，不存在时返回空表。"""
     if not path.exists():
         return pd.DataFrame()
     try:
@@ -77,7 +67,6 @@ def read_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
 
 
 def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """加载中文字体；找不到时使用默认字体。"""
     candidates = [
         "C:/Windows/Fonts/msyhbd.ttc" if bold else "C:/Windows/Fonts/msyh.ttc",
         "C:/Windows/Fonts/simhei.ttf",
@@ -95,7 +84,6 @@ def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFo
 
 
 def wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
-    """按像素宽度拆分中文文本。"""
     lines: list[str] = []
     current = ""
     for char in str(text):
@@ -120,7 +108,6 @@ def draw_wrapped(
     max_width: int,
     line_gap: int = 8,
 ) -> int:
-    """绘制自动换行文本，并返回文本块高度。"""
     x, y = xy
     line_height = draw.textbbox((0, 0), "国", font=font)[3] + line_gap
     lines = wrap_text(draw, text, font, max_width)
@@ -130,393 +117,271 @@ def draw_wrapped(
 
 
 def rounded_rect(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], fill: str, outline: str | None = None, radius: int = 24, width: int = 2) -> None:
-    """绘制圆角矩形。"""
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 
-def pillbox_body(draw: ImageDraw.ImageDraw, x: int, y: int, w: int, h: int, scale: float = 1.0) -> None:
-    """绘制智能药盒主体效果。"""
-    shadow = int(18 * scale)
-    rounded_rect(draw, (x + shadow, y + shadow, x + w + shadow, y + h + shadow), PALETTE["shadow"], radius=int(34 * scale))
-    rounded_rect(draw, (x, y, x + w, y + h), PALETTE["white"], PALETTE["line"], radius=int(34 * scale), width=int(3 * scale))
-    rounded_rect(draw, (x + int(28 * scale), y + int(28 * scale), x + w - int(28 * scale), y + int(95 * scale)), "#EAF3FF", None, radius=int(20 * scale))
-    draw.text((x + int(48 * scale), y + int(42 * scale)), "Smart Pillbox", font=load_font(int(30 * scale), True), fill=PALETTE["ink"])
-    draw.text((x + w - int(190 * scale), y + int(47 * scale)), "微信同步", font=load_font(int(22 * scale)), fill=PALETTE["blue"])
-
-    cell_gap = int(14 * scale)
-    cell_w = int((w - 70 * scale - 3 * cell_gap) / 4)
-    cell_h = int(118 * scale)
-    colors = ["#DFF5E6", "#E2F0FF", "#FFF1D6", "#FCE2DD"]
-    labels = ["早", "中", "晚", "睡前"]
-    for i in range(4):
-        cx = x + int(35 * scale) + i * (cell_w + cell_gap)
-        cy = y + int(125 * scale)
-        rounded_rect(draw, (cx, cy, cx + cell_w, cy + cell_h), colors[i], "#B8C6D8", radius=int(18 * scale), width=int(2 * scale))
-        draw.text((cx + int(26 * scale), cy + int(30 * scale)), labels[i], font=load_font(int(34 * scale), True), fill=PALETTE["ink"])
-        draw.ellipse((cx + cell_w - int(42 * scale), cy + int(22 * scale), cx + cell_w - int(20 * scale), cy + int(44 * scale)), fill=PALETTE["green"])
-
-    rounded_rect(draw, (x + int(42 * scale), y + h - int(78 * scale), x + w - int(42 * scale), y + h - int(28 * scale)), "#F5F8FB", "#CCD8E2", radius=int(16 * scale))
-    draw.text((x + int(62 * scale), y + h - int(66 * scale)), "语音 + 灯光 + 蜂鸣 + 远程监护", font=load_font(int(22 * scale)), fill=PALETTE["muted"])
-
-
-def draw_callout(draw: ImageDraw.ImageDraw, anchor: tuple[int, int], target: tuple[int, int], title: str, text: str, width: int = 330) -> None:
-    """绘制功能标注气泡。"""
-    x, y = anchor
-    draw.line((target[0], target[1], x, y + 32), fill=PALETTE["blue"], width=3)
-    rounded_rect(draw, (x, y, x + width, y + 118), PALETTE["white"], PALETTE["line"], radius=18)
-    draw.text((x + 18, y + 15), title, font=load_font(24, True), fill=PALETTE["ink"])
-    draw_wrapped(draw, (x + 18, y + 50), text, load_font(18), PALETTE["muted"], width - 36, 5)
-
-
 # =========================
-# 3. 五类设计图片绘制
+# 3. PIL 示意图生成（离线备选方案）
 # =========================
 
-def create_render_image(path: Path, req_df: pd.DataFrame) -> None:
-    """生成产品设计效果图。"""
-    # 如果已经存在图像模型生成的高保真立体图，默认保留，避免一键运行时被兜底示意图覆盖。
-    if path.exists() and path.stat().st_size >= HIGH_FIDELITY_THRESHOLD_BYTES:
-        return
-
-    img = Image.new("RGB", (1600, 1000), PALETTE["bg"])
+def create_render_image(path: Path, req_df: pd.DataFrame, product_name: str) -> None:
+    """生成简化的产品效果示意图"""
+    w, h = 800, 600
+    img = Image.new("RGB", (w, h), PALETTE["bg"])
     draw = ImageDraw.Draw(img)
-    draw.text((80, 60), "智能药盒产品设计效果图", font=load_font(52, True), fill=PALETTE["ink"])
-    draw.text((82, 128), "立体外观 / 多模态提醒 / 分仓防错 / 远程监护 / 适老化交互", font=load_font(28), fill=PALETTE["muted"])
+    font_title = load_font(28, bold=True)
+    font_body = load_font(16)
 
-    # 兜底版使用伪 3D 等轴测绘制，让产品有明显厚度、顶面和侧面。
-    x, y, w, h = 470, 330, 660, 300
-    dx, dy = 95, -72
-    front = (x, y, x + w, y + h)
-    top_poly = [(x, y), (x + dx, y + dy), (x + w + dx, y + dy), (x + w, y)]
-    side_poly = [(x + w, y), (x + w + dx, y + dy), (x + w + dx, y + h + dy), (x + w, y + h)]
-    draw.polygon([(x + 35, y + h + 45), (x + w + 150, y + h - 20), (x + w + 120, y + h + 65), (x + 10, y + h + 90)], fill="#DDE7F0")
-    draw.polygon(top_poly, fill="#F8FBFF", outline=PALETTE["line"])
-    draw.polygon(side_poly, fill="#D6E3EF", outline=PALETTE["line"])
-    rounded_rect(draw, front, PALETTE["white"], PALETTE["line"], radius=34, width=3)
+    # 面板
+    rounded_rect(draw, (40, 40, w - 40, h - 40), PALETTE["white"], PALETTE["line"])
 
-    rounded_rect(draw, (x + 36, y + 28, x + w - 36, y + 86), "#EAF3FF", None, radius=18)
-    draw.text((x + 58, y + 43), "Smart Pillbox", font=load_font(30, True), fill=PALETTE["ink"])
-    draw.text((x + w - 178, y + 47), "远程同步", font=load_font(22), fill=PALETTE["blue"])
-    for i in range(4):
-        cx = x + 45 + i * 150
-        cy = y + 120
-        color = ["#DFF5E6", "#E2F0FF", "#FFF1D6", "#FCE2DD"][i]
-        label = ["早", "中", "晚", "睡前"][i]
-        rounded_rect(draw, (cx, cy, cx + 120, cy + 118), color, "#B8C6D8", radius=18, width=2)
-        draw.text((cx + 34, cy + 34), label, font=load_font(34, True), fill=PALETTE["ink"])
-        draw.ellipse((cx + 91, cy + 22, cx + 111, cy + 42), fill=PALETTE["green"])
-    rounded_rect(draw, (x + 52, y + h - 55, x + w - 52, y + h - 20), "#F5F8FB", "#CCD8E2", radius=14)
-    draw.text((x + 70, y + h - 48), "语音提醒  LED灯光  蜂鸣器  电池状态", font=load_font(20), fill=PALETTE["muted"])
+    # 标题
+    draw.text((w // 2, 80), f"{product_name} 产品设计效果图", font=font_title, fill=PALETTE["ink"], anchor="mt")
 
-    draw_callout(draw, (80, 250), (520, 390), "分仓防错", "按早、中、晚、睡前分格，降低漏服与错服风险。")
-    draw_callout(draw, (80, 585), (585, 610), "适老交互", "大字体标识、状态灯和一键确认，降低老人使用门槛。")
-    draw_callout(draw, (1190, 250), (1030, 390), "远程监护", "服药记录同步到手机端，家属可查看异常提醒。")
-    draw_callout(draw, (1190, 585), (985, 650), "低功耗提醒", "语音、灯光、蜂鸣组合提醒，兼顾续航与可靠性。")
+    # 产品简图区域
+    rounded_rect(draw, (60, 130, w - 60, 380), PALETTE["panel"], PALETTE["line"], radius=16)
+    draw.text((w // 2, 255), f"〔{product_name} 产品主体示意〕", font=load_font(18), fill=PALETTE["muted"], anchor="mm")
 
-    if not req_df.empty:
-        top = req_df.sort_values("重要度", ascending=False).head(4)
-        x = 80
-        y = 820
-        draw.text((x, y), "评论数据驱动的核心需求", font=load_font(28, True), fill=PALETTE["ink"])
-        for i, (_, row) in enumerate(top.iterrows()):
-            draw.text((x + i * 370, y + 45), f"{i + 1}. {row.get('需求名称', '')}", font=load_font(22, True), fill=PALETTE["blue"])
-            draw_wrapped(draw, (x + i * 370, y + 78), str(row.get("来源关键词", "")), load_font(18), PALETTE["muted"], 320)
+    # 底部信息
+    top_reqs = req_df.head(4) if not req_df.empty else []
+    y_offset = 420
+    for i, (_, row) in enumerate(top_reqs.iterrows()):
+        tag_x = 80 + (i % 2) * 340
+        tag_y = y_offset + (i // 2) * 50
+        req_name = row.get("需求名称", row.get("设计机会点", ""))
+        draw.text((tag_x, tag_y), f"• {req_name}", font=font_body, fill=PALETTE["ink"])
 
+    draw.text((w // 2, h - 50), "本图由系统自动生成，为示意图（非真实渲染）", font=load_font(12), fill=PALETTE["muted"], anchor="mb")
     img.save(path)
 
 
-def create_three_view(path: Path) -> None:
-    """生成产品三视图。"""
-    if path.exists() and path.stat().st_size >= HIGH_FIDELITY_THRESHOLD_BYTES:
-        return
-
-    img = Image.new("RGB", (1600, 1000), "#FFFFFF")
+def create_board(path: Path, image_dir: Path, req_df: pd.DataFrame, topic_df: pd.DataFrame, product_name: str) -> None:
+    """生成产品设计展板"""
+    w, h = 1200, 900
+    img = Image.new("RGB", (w, h), PALETTE["bg"])
     draw = ImageDraw.Draw(img)
-    draw.text((70, 55), "智能药盒三视图", font=load_font(52, True), fill=PALETTE["ink"])
-    draw.text((72, 120), "正视图 / 俯视图 / 侧视图，展示药仓、屏幕、提醒与电池结构关系", font=load_font(26), fill=PALETTE["muted"])
+    font_title = load_font(32, bold=True)
+    font_section = load_font(20, bold=True)
+    font_body = load_font(14)
 
-    # 正视图
-    draw.text((170, 210), "正视图", font=load_font(30, True), fill=PALETTE["ink"])
-    pillbox_body(draw, 90, 280, 430, 260, 0.72)
-    draw.line((90, 590, 520, 590), fill=PALETTE["line"], width=2)
-    draw.text((230, 605), "约 160 mm", font=load_font(20), fill=PALETTE["muted"])
+    # 展板标题区
+    rounded_rect(draw, (20, 20, w - 20, 100), PALETTE["blue"])
+    draw.text((w // 2, 70), f"{product_name} 产品设计展板", font=font_title, fill=PALETTE["white"], anchor="mm")
 
-    # 俯视图
-    draw.text((730, 210), "俯视图", font=load_font(30, True), fill=PALETTE["ink"])
-    rounded_rect(draw, (600, 300, 1040, 540), PALETTE["white"], PALETTE["line"], radius=26, width=3)
-    for i, color in enumerate(["#DFF5E6", "#E2F0FF", "#FFF1D6", "#FCE2DD"]):
-        x = 625 + i * 100
-        rounded_rect(draw, (x, 335, x + 82, 480), color, "#B8C6D8", radius=16)
-    rounded_rect(draw, (1020, 355, 1160, 485), "#F5F8FB", "#CCD8E2", radius=20)
-    draw.text((1044, 405), "电池仓", font=load_font(22), fill=PALETTE["muted"])
-    draw.line((600, 590, 1160, 590), fill=PALETTE["line"], width=2)
-    draw.text((800, 605), "约 85 mm", font=load_font(20), fill=PALETTE["muted"])
+    # 左栏：需求分析
+    rounded_rect(draw, (20, 140, 580, 500), PALETTE["white"], PALETTE["line"])
+    draw.text((300, 160), "用户需求分析", font=font_section, fill=PALETTE["ink"], anchor="mt")
 
-    # 侧视图
-    draw.text((1245, 210), "侧视图", font=load_font(30, True), fill=PALETTE["ink"])
-    rounded_rect(draw, (1230, 365, 1510, 470), PALETTE["white"], PALETTE["line"], radius=24, width=3)
-    rounded_rect(draw, (1265, 328, 1475, 365), "#EAF3FF", "#CCD8E2", radius=18)
-    draw.ellipse((1450, 395, 1486, 431), fill=PALETTE["green"])
-    draw.line((1535, 365, 1535, 470), fill=PALETTE["line"], width=2)
-    draw.text((1490, 495), "约 32 mm", font=load_font(20), fill=PALETTE["muted"])
+    top_reqs = req_df.head(6) if not req_df.empty else []
+    y = 200
+    for _, row in enumerate(top_reqs.iterrows()):
+        row_data = row[1]
+        req_name = row_data.get("需求名称", row_data.get("设计机会点", ""))
+        importance = row_data.get("重要度", "")
+        draw_wrapped(draw, (40, y), f"• {req_name} (重要度: {importance})", font_body, PALETTE["ink"], 520)
+        y += 40
 
-    # 设计说明
-    rounded_rect(draw, (85, 735, 1515, 900), PALETTE["panel"], None, radius=22)
-    draw.text((120, 765), "结构说明", font=load_font(28, True), fill=PALETTE["ink"])
-    notes = "圆角外壳降低握持边缘压迫；四分仓对应常见服药时段；顶部显示与状态灯用于提醒反馈；侧向电池仓便于维护和续航管理。"
-    draw_wrapped(draw, (120, 812), notes, load_font(24), PALETTE["muted"], 1360, 10)
+    # 右栏：主题聚类
+    rounded_rect(draw, (620, 140, w - 20, 500), PALETTE["white"], PALETTE["line"])
+    draw.text((900, 160), "评论主题聚类", font=font_section, fill=PALETTE["ink"], anchor="mt")
+
+    y = 200
+    top_topics = topic_df.head(6) if not topic_df.empty else []
+    for _, row in enumerate(top_topics.iterrows()):
+        row_data = row[1]
+        topic_name = row_data.get("主题名称", "")
+        topic_kws = row_data.get("主题关键词", "")
+        draw_wrapped(draw, (640, y), f"• {topic_name}: {topic_kws}", font_body, PALETTE["ink"], 540)
+        y += 40
+
+    # 底部：产品设计
+    rounded_rect(draw, (20, 660, w - 20, h - 20), PALETTE["white"], PALETTE["line"])
+    draw.text((w // 2, 680), "产品设计方案概要", font=font_section, fill=PALETTE["ink"], anchor="mt")
+
+    design_text = (
+        f"本展板基于{product_name}用户评论数据的自然语言处理分析结果。"
+        "通过TF-IDF关键词提取、情感分析、主题聚类及需求-功能-结构映射，"
+        "从用户反馈中系统性推导产品设计方向与机会点。"
+    )
+    draw_wrapped(draw, (60, 720), design_text, font_body, PALETTE["ink"], 1100)
+
+    draw.text((w // 2, h - 40), "本展板由系统自动生成，为示意图", font=load_font(11), fill=PALETTE["muted"], anchor="mb")
     img.save(path)
+    print(f"已生成展板：{path}")
 
 
-def create_exploded_view(path: Path) -> None:
-    """生成产品爆炸图。"""
-    # 如果已经存在图像模型生成的高保真爆炸图，默认保留。
-    if path.exists() and path.stat().st_size >= HIGH_FIDELITY_THRESHOLD_BYTES:
-        return
-
-    img = Image.new("RGB", (1600, 1000), PALETTE["bg"])
+def create_simple_placeholder(path: Path, label: str) -> None:
+    """生成简单占位图片"""
+    w, h = 800, 600
+    img = Image.new("RGB", (w, h), PALETTE["bg"])
     draw = ImageDraw.Draw(img)
-    draw.text((70, 55), "智能药盒爆炸图", font=load_font(52, True), fill=PALETTE["ink"])
-    draw.text((72, 120), "每个部件分离展示：可看清上盖、密封、药仓、提醒、电路、供电和底壳结构", font=load_font(26), fill=PALETTE["muted"])
-
-    x_center = 800
-    layers = [
-        ("防潮上盖", 185, 520, 72, "#DDF1FF", -120),
-        ("硅胶密封圈", 300, 565, 34, "#C9F0D8", 80),
-        ("可拆药仓", 405, 650, 118, "#FFF1D6", -70),
-        ("LED提醒灯 + 蜂鸣器", 565, 510, 54, "#FCE2DD", 120),
-        ("主控电路板", 675, 455, 74, "#E2F0FF", -105),
-        ("电池仓 + 充电接口", 790, 500, 66, "#E8ECF2", 110),
-        ("底壳", 885, 680, 92, "#FFFFFF", 0),
-    ]
-    part_centers = []
-    for label, y, w, h, color, offset in layers:
-        x = x_center - w // 2 + offset
-        rounded_rect(draw, (x + 14, y + 14, x + w + 14, y + h + 14), PALETTE["shadow"], None, radius=22)
-        rounded_rect(draw, (x, y, x + w, y + h), color, PALETTE["line"], radius=22, width=3)
-        draw.text((x + 24, y + h // 2 - 14), label, font=load_font(24, True), fill=PALETTE["ink"])
-        part_centers.append((x + w // 2, y + h // 2))
-
-        if "药仓" in label:
-            for i in range(4):
-                cx = x + 34 + i * 145
-                rounded_rect(draw, (cx, y + 25, cx + 95, y + h - 22), ["#DFF5E6", "#E2F0FF", "#FFF1D6", "#FCE2DD"][i], "#B8C6D8", radius=16)
-        if "主控" in label:
-            draw.rectangle((x + 315, y + 18, x + 420, y + h - 18), fill="#5BA6FF", outline="#2770C9", width=2)
-            draw.ellipse((x + 50, y + 22, x + 88, y + 60), fill=PALETTE["green"])
-        if "电池" in label:
-            rounded_rect(draw, (x + 45, y + 18, x + 205, y + 48), "#D9DEE7", "#AAB6C4", radius=12)
-            draw.text((x + 230, y + 20), "USB-C", font=load_font(18), fill=PALETTE["muted"])
-
-    for i in range(len(part_centers) - 1):
-        draw.line((*part_centers[i], *part_centers[i + 1]), fill="#A8B8C8", width=2)
-
-    callouts = [
-        ((135, 220), part_centers[0], "防潮上盖", "透明上盖保护药品，减少灰尘和受潮。"),
-        ((120, 470), part_centers[2], "四格药仓", "早、中、晚、睡前分仓管理，降低错服风险。"),
-        ((1190, 365), part_centers[3], "提醒模块", "LED灯和蜂鸣器用于到点提醒。"),
-        ((1190, 690), part_centers[5], "供电与接口", "独立电池仓和充电接口便于维护。"),
-    ]
-    for anchor, target, title, text in callouts:
-        draw_callout(draw, anchor, target, title, text)
-
-    img.save(path)
-
-
-def create_scenario_image(path: Path) -> None:
-    """生成场景使用效果图。"""
-    if path.exists() and path.stat().st_size >= HIGH_FIDELITY_THRESHOLD_BYTES:
-        return
-
-    img = Image.new("RGB", (1600, 1000), "#F5F7FA")
-    draw = ImageDraw.Draw(img)
-    draw.text((70, 55), "智能药盒场景使用效果图", font=load_font(52, True), fill=PALETTE["ink"])
-    draw.text((72, 120), "家庭老人用药管理场景：药盒提醒、老人确认、家属远程查看", font=load_font(26), fill=PALETTE["muted"])
-
-    # 家庭桌面和背景
-    rounded_rect(draw, (60, 730, 1540, 900), "#E7D9C8", None, radius=26)
-    rounded_rect(draw, (90, 190, 1510, 760), "#FFFFFF", "#E4EAF0", radius=28)
-    draw.rectangle((90, 610, 1510, 760), fill="#F2F6FA")
-
-    # 老人简化人物
-    draw.ellipse((190, 260, 330, 400), fill="#F1C6A8", outline="#D7A285", width=3)
-    draw.arc((215, 310, 305, 365), 0, 180, fill=PALETTE["ink"], width=3)
-    rounded_rect(draw, (160, 410, 360, 690), "#BBD7FF", "#8CAEDC", radius=60)
-    draw.line((260, 690, 230, 760), fill="#4B5A66", width=16)
-    draw.line((260, 690, 315, 760), fill="#4B5A66", width=16)
-    draw.text((150, 785), "老年用户", font=load_font(26, True), fill=PALETTE["ink"])
-
-    # 桌面药盒
-    pillbox_body(draw, 520, 560, 520, 260, 0.85)
-    for i in range(3):
-        draw.arc((515 - i * 35, 500 - i * 35, 1045 + i * 35, 860 + i * 35), 220, 320, fill=PALETTE["orange"], width=5)
-    draw.text((590, 500), "到点提醒", font=load_font(34, True), fill=PALETTE["orange"])
-
-    # 手机端
-    rounded_rect(draw, (1180, 300, 1390, 650), "#1C2530", None, radius=36)
-    rounded_rect(draw, (1200, 330, 1370, 620), "#F9FBFD", None, radius=24)
-    draw.text((1225, 360), "家属端", font=load_font(26, True), fill=PALETTE["ink"])
-    rounded_rect(draw, (1225, 415, 1345, 465), "#DFF5E6", None, radius=16)
-    draw.text((1245, 427), "已服药", font=load_font(22, True), fill=PALETTE["green"])
-    rounded_rect(draw, (1225, 490, 1345, 550), "#E2F0FF", None, radius=16)
-    draw.text((1242, 508), "记录同步", font=load_font(20), fill=PALETTE["blue"])
-    draw.line((1040, 610, 1180, 480), fill=PALETTE["blue"], width=4)
-    draw.text((1085, 535), "微信同步", font=load_font(22), fill=PALETTE["blue"])
-
-    img.save(path)
-
-
-def create_board(path: Path, image_dir: Path, req_df: pd.DataFrame, topic_df: pd.DataFrame) -> None:
-    """生成产品设计展板。"""
-    if path.exists() and path.stat().st_size >= HIGH_FIDELITY_THRESHOLD_BYTES:
-        return
-
-    img = Image.new("RGB", (2000, 1400), "#FFFFFF")
-    draw = ImageDraw.Draw(img)
-    draw.rectangle((0, 0, 2000, 170), fill="#102033")
-    draw.text((70, 42), "基于用户评论数据的智能药盒产品设计研究", font=load_font(56, True), fill="#FFFFFF")
-    draw.text((72, 112), "评论数据导入 -> 文本挖掘 -> 需求映射 -> 产品方案 -> 设计图像输出", font=load_font(28), fill="#D8E6F3")
-
-    # 左侧研究流程
-    rounded_rect(draw, (70, 230, 575, 1260), "#F4F8FC", "#DCE6EF", radius=24)
-    draw.text((105, 265), "实验流程", font=load_font(36, True), fill=PALETTE["ink"])
-    steps = ["评论清洗", "TF-IDF关键词", "情感分析", "主题聚类", "需求-功能-结构映射", "Neo4j知识图谱", "产品设计方案"]
-    y = 330
-    for i, step in enumerate(steps):
-        draw.ellipse((110, y, 150, y + 40), fill=PALETTE["blue"])
-        draw.text((123, y + 6), str(i + 1), font=load_font(22, True), fill="#FFFFFF")
-        draw.text((175, y + 3), step, font=load_font(26, True), fill=PALETTE["ink"])
-        if i < len(steps) - 1:
-            draw.line((130, y + 45, 130, y + 80), fill=PALETTE["line"], width=4)
-        y += 110
-
-    # 中间产品图
-    rounded_rect(draw, (640, 230, 1345, 800), "#F9FBFD", "#DCE6EF", radius=24)
-    draw.text((675, 265), "核心产品概念", font=load_font(36, True), fill=PALETTE["ink"])
-    pillbox_body(draw, 775, 405, 440, 230, 0.72)
-    draw_wrapped(draw, (690, 690), "面向老年慢病人群与家庭照护场景，集成多模态提醒、分仓防错、远程监护和适老交互。", load_font(24), PALETTE["muted"], 590, 10)
-
-    # 右侧需求证据
-    rounded_rect(draw, (1410, 230, 1930, 800), "#F4F8FC", "#DCE6EF", radius=24)
-    draw.text((1445, 265), "用户需求证据", font=load_font(36, True), fill=PALETTE["ink"])
-    if not req_df.empty:
-        top = req_df.sort_values("重要度", ascending=False).head(5)
-        yy = 330
-        for _, row in top.iterrows():
-            draw.text((1450, yy), str(row.get("需求名称", "")), font=load_font(24, True), fill=PALETTE["blue"])
-            yy += 35
-            yy += draw_wrapped(draw, (1450, yy), str(row.get("来源关键词", "")), load_font(19), PALETTE["muted"], 420, 4) + 18
-
-    # 底部图像组
-    rounded_rect(draw, (640, 860, 1930, 1260), "#F9FBFD", "#DCE6EF", radius=24)
-    draw.text((675, 895), "设计输出图像", font=load_font(36, True), fill=PALETTE["ink"])
-    thumbs = [
-        ("效果图", image_dir / IMAGE_FILENAMES["render"]),
-        ("三视图", image_dir / IMAGE_FILENAMES["three_view"]),
-        ("爆炸图", image_dir / IMAGE_FILENAMES["exploded"]),
-        ("场景图", image_dir / IMAGE_FILENAMES["scenario"]),
-    ]
-    x = 675
-    for label, thumb_path in thumbs:
-        if thumb_path.exists():
-            thumb = Image.open(thumb_path).convert("RGB")
-            thumb.thumbnail((270, 220))
-            img.paste(thumb, (x, 960))
-        draw.text((x + 80, 1195), label, font=load_font(24, True), fill=PALETTE["ink"])
-        x += 300
-
-    draw.text((70, 1315), "输出文件：清洗结果、关键词结果、情感结果、主题聚类、映射数据库、Neo4j文件、设计方案、设计图像与展板", font=load_font(24), fill=PALETTE["muted"])
+    rounded_rect(draw, (60, 60, w - 60, h - 60), PALETTE["white"], PALETTE["line"])
+    draw.text((w // 2, h // 2), f"〔{label}〕", font=load_font(24), fill=PALETTE["muted"], anchor="mm")
+    draw.text((w // 2, h - 40), "示意图 — 可替换为AI渲染图", font=load_font(12), fill=PALETTE["muted"], anchor="mb")
     img.save(path)
 
 
 # =========================
-# 4. 生成提示词与主流程
+# 4. AI 真实渲染（DALL-E 兼容接口）
 # =========================
 
-def build_image_prompts(req_df: pd.DataFrame) -> str:
-    """生成可复制到图像模型中的提示词。"""
-    req_names = "、".join(req_df.get("需求名称", pd.Series(dtype=str)).astype(str).head(6).tolist()) if not req_df.empty else "服药提醒、分仓防错、远程监护、适老交互"
-    return f"""# 智能药盒设计图像生成提示词
+def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -> bool:
+    """使用 OpenAI DALL-E 兼容接口生成真实感渲染图"""
+    api_key = os.getenv("LLM_API_KEY")
+    if not api_key:
+        return False
+
+    try:
+        from openai import OpenAI
+    except Exception:
+        return False
+
+    try:
+        base_url = os.getenv("LLM_BASE_URL") or None
+        client = OpenAI(api_key=api_key, base_url=base_url)
+
+        # 尝试 DALL-E 3
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            size=size,
+            quality="standard",
+            n=1,
+        )
+        image_url = response.data[0].url
+        if image_url:
+            import urllib.request
+            urllib.request.urlretrieve(image_url, str(output_path))
+            print(f"AI渲染完成：{output_path}")
+            return True
+    except Exception as e:
+        print(f"DALL-E 生成失败，尝试备用方式：{e}")
+
+    return False
+
+
+def build_image_prompts(product_name: str, req_df: pd.DataFrame) -> str:
+    """构建 AI 图像生成提示词"""
+    top_keywords = ""
+    if not req_df.empty and "来源关键词" in req_df.columns:
+        all_kws = []
+        for _, row in req_df.head(5).iterrows():
+            kws = str(row.get("来源关键词", ""))
+            all_kws.append(kws)
+        top_keywords = "、".join(all_kws[:3]) if all_kws else ""
+
+    return f"""# {product_name} 产品设计图像生成提示词
 
 ## 1. 设计效果图
-Use case: product-mockup
-Asset type: smart pillbox product concept render
-Primary request: 一款面向老年慢病人群的智能药盒，体现{req_names}。
-Style/medium: clean 3D product rendering, realistic plastic and silicone material
-Composition/framing: three-quarter front view, centered product, readable pill compartments
-Lighting/mood: soft studio lighting, clean medical-home appliance feeling
-Constraints: no brand logo, no watermark, no messy background
+Prompt: 专业的{product_name}产品设计渲染图，展示产品整体外观和核心功能模块，干净的白色背景，柔和的工作室灯光，高品质工业设计摄影风格，无品牌logo，无水印
 
-## 2. 三视图
-Use case: infographic-diagram
-Asset type: orthographic three-view drawing
-Primary request: 智能药盒正视图、俯视图、侧视图，展示药仓、状态灯、提醒模块、电池仓。
-Style/medium: industrial design board drawing, clean lines, Chinese labels
-Constraints: clear structure, simple dimensions, no decorative clutter
+## 2. 产品细节图
+Prompt: {product_name}产品细节特写渲染图，展示关键功能组件和材质质感，微距摄影品质，干净背景，工业设计展示风格
 
-## 3. 爆炸图
-Use case: infographic-diagram
-Asset type: exploded product structure diagram
-Primary request: 智能药盒爆炸图，包含防潮上盖、密封圈、可拆药仓、LED/蜂鸣提醒模块、主控板、底壳与电池仓。
-Style/medium: clean technical product illustration, labeled parts
-Constraints: readable hierarchy, no brand logo, no watermark
+## 3. 使用场景图  
+Prompt: 真实生活场景中用户使用{product_name}的照片级渲染图，温馨自然光线，现代家居环境，人物自然互动，充满生活气息
 
-## 4. 场景使用效果图
-Use case: photorealistic-natural
-Asset type: usage scenario render
-Primary request: 家庭场景中老人使用智能药盒，到点提醒，家属手机端收到服药记录同步。
-Style/medium: warm realistic lifestyle render
-Constraints: friendly, safe, no hospital fear, no brand logo
+## 4. 产品展板
+Prompt: {product_name}产品设计研究生课题展板，包含产品渲染图、需求分析、功能结构映射图表，学术展示风格，信息图表布局清晰
 
-## 5. 展板
-Use case: productivity-visual
-Asset type: graduate research product design presentation board
-Primary request: 展示评论数据分析流程、核心需求、产品设计方案、三视图、爆炸图和场景图。
-Style/medium: clean academic product design board
-Constraints: layout clear, text concise, no watermark
+---
+关键词参考：{top_keywords}
 """
 
 
+# =========================
+# 5. 主流程
+# =========================
+
 def main() -> None:
-    """第八阶段：生成设计图片与展板。"""
-    parser = argparse.ArgumentParser(description="第八阶段：生成设计效果图、三视图、爆炸图、场景图和展板")
+    parser = argparse.ArgumentParser(description="第八阶段：生成设计图片与展板")
     parser.add_argument("--output-dir", default="output", help="输出目录")
+    parser.add_argument("--product-name", default="产品", help="产品名称")
+    parser.add_argument("--ai-render", action="store_true", help="使用 AI 生成真实渲染图（需配置 LLM_API_KEY）")
     args = parser.parse_args()
 
+    product_name = args.product_name
+    use_ai = args.ai_render or bool(os.getenv("LLM_API_KEY"))
+
     output_dir = ensure_output_dir(args.output_dir)
-    ensure_previous_outputs(output_dir)
+    ensure_previous_outputs(output_dir, product_name)
     image_dir = output_dir / "design_images"
     image_dir.mkdir(parents=True, exist_ok=True)
 
-    mapping_path = output_dir / "智能药盒需求功能映射数据库.xlsx"
+    mapping_path = output_dir / f"{product_name}_需求功能映射数据库.xlsx"
     topic_path = output_dir / "BERTopic主题聚类结果.xlsx"
     req_df = read_sheet(mapping_path, "用户需求表")
     topic_df = read_sheet(topic_path, "主题汇总")
 
-    create_render_image(image_dir / IMAGE_FILENAMES["render"], req_df)
-    create_three_view(image_dir / IMAGE_FILENAMES["three_view"])
-    create_exploded_view(image_dir / IMAGE_FILENAMES["exploded"])
-    create_scenario_image(image_dir / IMAGE_FILENAMES["scenario"])
-    create_board(image_dir / IMAGE_FILENAMES["board"], image_dir, req_df, topic_df)
+    # 定义输出图片路径
+    images = {
+        "render": image_dir / f"{product_name}设计效果图.png",
+        "detail": image_dir / f"{product_name}细节图.png",
+        "scenario": image_dir / f"{product_name}场景使用效果图.png",
+        "board": image_dir / f"{product_name}产品设计展板.png",
+    }
 
+    # 生成图像提示词
+    prompts_text = build_image_prompts(product_name, req_df)
     prompt_path = image_dir / "设计图像生成提示词.txt"
-    prompt_path.write_text(build_image_prompts(req_df), encoding="utf-8")
+    prompt_path.write_text(prompts_text, encoding="utf-8")
 
+    # 尝试 AI 渲染
+    if use_ai:
+        print("尝试 AI 真实渲染...")
+        # 准备各图片的专用 prompt
+        prompt_lines = [l for l in prompts_text.split("\n") if l.startswith("Prompt:")]
+        render_ok = generate_ai_image(
+            f"Professional product design render of {product_name}, showing overall appearance and core features, clean white background, soft studio lighting, high quality industrial design photography style, no brand logo, no watermark",
+            images["render"], "1024x1024"
+        ) if prompt_lines else False
+
+        scenario_ok = generate_ai_image(
+            f"Photorealistic lifestyle render of a person using {product_name} in a warm modern home setting, natural lighting, clean composition, no brand logo, no watermark",
+            images["scenario"], "1024x1024"
+        ) if len(prompt_lines) > 1 else False
+
+        board_ok = generate_ai_image(
+            f"Graduate research product design presentation board for {product_name}, including product renders, requirement analysis charts, functional-structural mapping diagrams, clean academic layout, Chinese text labels, no watermark",
+            images["board"], "1792x1024"
+        ) if len(prompt_lines) > 2 else False
+
+        detail_ok = generate_ai_image(
+            f"Close-up macro photography style render of {product_name} showing key functional components and material texture, clean background, industrial design showcase style, no brand logo",
+            images["detail"], "1024x1024"
+        ) if len(prompt_lines) > 3 else False
+
+    # 回退到 PIL 示意图
+    if not images["render"].exists():
+        print("生成 PIL 示意图...")
+        create_render_image(images["render"], req_df, product_name)
+
+    if not images["detail"].exists():
+        create_simple_placeholder(images["detail"], f"{product_name} 细节图")
+
+    if not images["scenario"].exists():
+        create_simple_placeholder(images["scenario"], f"{product_name} 场景使用图")
+
+    # 展板始终用 PIL 生成（AI展板效果不稳定）
+    create_board(images["board"], image_dir, req_df, topic_df, product_name)
+
+    # 生成图片清单
     manifest = pd.DataFrame([
-        {"图像类型": "设计效果图", "文件路径": str(image_dir / IMAGE_FILENAMES["render"]), "用途": "展示智能药盒整体外观与核心功能"},
-        {"图像类型": "三视图", "文件路径": str(image_dir / IMAGE_FILENAMES["three_view"]), "用途": "展示正视、俯视、侧视结构关系"},
-        {"图像类型": "爆炸图", "文件路径": str(image_dir / IMAGE_FILENAMES["exploded"]), "用途": "展示功能模块与结构层级"},
-        {"图像类型": "场景使用效果图", "文件路径": str(image_dir / IMAGE_FILENAMES["scenario"]), "用途": "展示家庭服药提醒与远程监护场景"},
-        {"图像类型": "产品设计展板", "文件路径": str(image_dir / IMAGE_FILENAMES["board"]), "用途": "用于论文答辩、课程展示或设计汇报"},
+        {"图像类型": "设计效果图", "文件路径": str(images["render"]), "用途": f"展示{product_name}整体外观与核心功能"},
+        {"图像类型": "细节图", "文件路径": str(images["detail"]), "用途": f"展示{product_name}关键组件与材质"},
+        {"图像类型": "场景使用效果图", "文件路径": str(images["scenario"]), "用途": f"展示{product_name}真实使用场景"},
+        {"图像类型": "产品设计展板", "文件路径": str(images["board"]), "用途": "用于论文答辩、课程展示或设计汇报"},
         {"图像类型": "图像生成提示词", "文件路径": str(prompt_path), "用途": "可复制到图像生成模型进一步渲染"},
     ])
     manifest_path = image_dir / "设计图像清单.xlsx"
     with pd.ExcelWriter(manifest_path, engine="openpyxl") as writer:
         manifest.to_excel(writer, sheet_name="设计图像清单", index=False)
 
+    print(f"产品名称：{product_name}")
     print(f"设计图片输出目录：{image_dir}")
-    for filename in IMAGE_FILENAMES.values():
-        print(f"已生成：{image_dir / filename}")
+    for label, img_path in images.items():
+        if img_path.exists():
+            print(f"已生成：{img_path}")
     print(f"已生成：{prompt_path}")
     print(f"已生成：{manifest_path}")
 
