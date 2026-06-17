@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import csv
@@ -6,10 +6,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from common import ensure_output_dir, stable_id
+from common import ensure_output_dir, resolve_latest_output_path, stable_id
 
 
 def read_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
+    path = resolve_latest_output_path(path)
     if not path.exists():
         return pd.DataFrame()
     try:
