@@ -309,9 +309,19 @@ def keyword_examples(df: pd.DataFrame, keywords: Iterable[str], max_examples: in
 
 def load_cleaned_or_build(input_path: str | Path | None, output_dir: Path) -> pd.DataFrame:
     cleaned_path = output_dir / "cleaned_comments.xlsx"
-    if cleaned_path.exists():
-        return normalize_cleaned_dataframe(pd.read_excel(cleaned_path))
     try:
+        # 如果页面传入了新的上传文件，必须优先使用该文件重新清洗。
+        # 否则分阶段运行 02/03/04 时会继续读取旧的 cleaned_comments.xlsx，
+        # 造成“上传了新产品评论，但结果仍是上一次产品”的错觉。
+        if input_path:
+            df, _, _ = build_cleaned_dataframe(input_path)
+            cleaned_path.parent.mkdir(parents=True, exist_ok=True)
+            df.to_excel(cleaned_path, index=False)
+            return df
+
+        if cleaned_path.exists():
+            return normalize_cleaned_dataframe(pd.read_excel(cleaned_path))
+
         df, _, _ = build_cleaned_dataframe(input_path)
     except FileNotFoundError:
         raise FileNotFoundError("请先上传评论数据文件（支持 .xlsx/.xls/.csv）")

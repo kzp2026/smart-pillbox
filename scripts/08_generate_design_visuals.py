@@ -226,9 +226,21 @@ def create_simple_placeholder(path: Path, label: str) -> None:
 # 4. AI 真实渲染（DALL-E 兼容接口）
 # =========================
 
+def get_image_api_config() -> tuple[str | None, str | None, str]:
+    """读取图像生成接口配置。
+
+    Streamlit Cloud 中建议配置 IMAGE_API_KEY 或 OPENAI_API_KEY。
+    不建议复用 DeepSeek 等纯文本 LLM 的 LLM_API_KEY，否则图片接口会失败并降级为示意图。
+    """
+    api_key = os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
+    base_url = os.getenv("IMAGE_BASE_URL") or None
+    model = os.getenv("IMAGE_MODEL", "dall-e-3")
+    return api_key, base_url, model
+
+
 def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -> bool:
-    """使用 OpenAI DALL-E 兼容接口生成真实感渲染图"""
-    api_key = os.getenv("LLM_API_KEY")
+    """使用 OpenAI Images 兼容接口生成真实感渲染图。"""
+    api_key, base_url, model = get_image_api_config()
     if not api_key:
         return False
 
@@ -238,12 +250,10 @@ def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -
         return False
 
     try:
-        base_url = os.getenv("LLM_BASE_URL") or None
         client = OpenAI(api_key=api_key, base_url=base_url)
 
-        # 尝试 DALL-E 3
         response = client.images.generate(
-            model="dall-e-3",
+            model=model,
             prompt=prompt,
             size=size,
             quality="standard",
@@ -298,11 +308,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="第八阶段：生成设计图片与展板")
     parser.add_argument("--output-dir", default="output", help="输出目录")
     parser.add_argument("--product-name", default="产品", help="产品名称")
-    parser.add_argument("--ai-render", action="store_true", help="使用 AI 生成真实渲染图（需配置 LLM_API_KEY）")
+    parser.add_argument("--ai-render", action="store_true", help="使用 AI 生成真实渲染图（需配置 IMAGE_API_KEY 或 OPENAI_API_KEY）")
     args = parser.parse_args()
 
     product_name = args.product_name
-    use_ai = args.ai_render or bool(os.getenv("LLM_API_KEY"))
+    image_api_key, _, image_model = get_image_api_config()
+    use_ai = args.ai_render or bool(image_api_key)
 
     output_dir = ensure_output_dir(args.output_dir)
     ensure_previous_outputs(output_dir, product_name)
@@ -329,7 +340,7 @@ def main() -> None:
 
     # 尝试 AI 渲染
     if use_ai:
-        print("尝试 AI 真实渲染...")
+        print(f"尝试 AI 真实渲染，图像模型：{image_model}")
         # 准备各图片的专用 prompt
         prompt_lines = [l for l in prompts_text.split("\n") if l.startswith("Prompt:")]
         render_ok = generate_ai_image(
@@ -351,6 +362,8 @@ def main() -> None:
             f"Close-up macro photography style render of {product_name} showing key functional components and material texture, clean background, industrial design showcase style, no brand logo",
             images["detail"], "1024x1024"
         ) if len(prompt_lines) > 3 else False
+    else:
+        print("未配置 IMAGE_API_KEY 或 OPENAI_API_KEY，设计图片将生成离线示意图；如需写实渲染，请在 Streamlit Cloud Secrets 中配置图像生成密钥。")
 
     # 回退到 PIL 示意图
     if not images["render"].exists():

@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -321,6 +322,8 @@ with tabs[6]:
 
 with tabs[7]:
     st.header("设计图片与展板")
+    if not (os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")):
+        st.warning("当前未配置图像生成密钥，系统会生成离线示意图；如需写实产品渲染图，请在 Streamlit Cloud Secrets 中配置 IMAGE_API_KEY 或 OPENAI_API_KEY。")
     col_a, col_b = st.columns(2)
     with col_a:
         render_image(f"design_images/{p}设计效果图.png", "产品设计效果图")
