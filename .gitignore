@@ -1,0 +1,51 @@
+﻿# Python
+__pycache__/
+*.pyc
+
+# Secrets
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Virtual environment
+.venv/
+
+# Tools & binaries
+tools/
+*.zip
+*.exe
+
+# Duplicate package
+streamlit_cloud_package/
+
+# Logs
+*.log
+
+# Extra/unrelated output files
+output/ai_resume*/
+output/lo_profile*/
+output/opening_report*/
+output/design_images/
+output/*简历*.docx
+output/*开题报告*.*
+output/*_resume*/
+output/*_render*/
+output/*_preview*/
+output/*_pdf*/
+output/*/cache/
+output/*/user/
+output/__pycache__/
+
+# Legacy experiment code
+代码/
+
+# Office temp files
+~$*
+
+# Extra output not in pipeline
+output/ai_resume_onepage.docx
+
+# Empty placeholder
+网页展示代码.txt
