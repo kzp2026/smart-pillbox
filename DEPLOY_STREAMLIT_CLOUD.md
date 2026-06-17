@@ -1,55 +1,40 @@
-# Streamlit Cloud 部署说明
+﻿# Streamlit Cloud 部署说明
 
 ## 1. 准备 GitHub 仓库
 
-Streamlit Cloud 需要从 GitHub 仓库部署。请把本项目根目录中的以下内容提交到 GitHub：
-
-- `app.py`
-- `requirements.txt`
-- `packages.txt`
-- `.streamlit/config.toml`
-- `scripts/`
-- `data/`（可选：如需默认演示数据）
-- `output/`（可选：如需默认展示已生成结果和高保真图片）
-- `README.md`
-
-不需要提交：
-
-- `__pycache__/`
-- 临时日志文件
+本项目已配置好 Streamlit Cloud 所需文件：
+- `app.py` — 主应用
+- `requirements.txt` — Python 依赖
+- `packages.txt` — 系统包（中文字体）
+- `.streamlit/config.toml` — 主题与上传限制
+- `scripts/` — 全部阶段脚本
+- `data/` — 示例数据（可选）
+- `output/` — 预生成结果（可选）
 
 ## 2. 在 Streamlit Cloud 新建应用
 
-1. 打开 `https://share.streamlit.io/`。
-2. 使用 GitHub 账号登录。
-3. 点击 `Create app` 或 `New app`。
-4. 选择包含本项目的 GitHub 仓库。
-5. Branch 选择 `main` 或你的实际分支。
-6. Main file path 填写：
+1. 打开 `https://share.streamlit.io/`
+2. 使用 GitHub 账号登录
+3. 点击 `Create app` 或 `New app`
+4. 选择包含本项目的 GitHub 仓库
+5. Branch 选择 `main`
+6. Main file path 填写：`app.py`
+7. 点击 Deploy
 
-```text
-app.py
-```
+## 3. 使用方式
 
-7. 点击部署。
-
-## 3. 部署后使用方式
-
-打开 Streamlit Cloud 分配的网址后：
-
-1. 上传 `.xlsx`、`.xls` 或 `.csv` 评论数据。
-2. 点击“一键生成全部研究结果”。
-3. 在网页标签页中查看评论清洗、需求关键词、痛点、主题聚类、映射数据库、知识图谱、设计方案、设计图片和展板。
-4. 在“下载中心”下载所有实验结果文件。
+1. 在侧边栏输入产品名称（如：蓝牙耳机、咖啡机、智能手表...）
+2. 上传 `.xlsx` / `.xls` / `.csv` 评论数据
+3. 点击"一键生成全部研究结果"
+4. 在各标签页查看：评论清洗、关键词、痛点、主题聚类、映射数据库、知识图谱、设计方案、设计图
+5. 在"下载中心"下载所有实验结果文件
 
 ## 4. 可选大模型增强
 
-如果需要在云端启用第 7 阶段的大模型文案增强，请在 Streamlit Cloud 的 `Secrets` 中配置：
-
+在 Streamlit Cloud 的 `Secrets` 中配置：
 ```toml
 LLM_API_KEY = "你的密钥"
 LLM_BASE_URL = "https://api.deepseek.com"
 LLM_MODEL = "deepseek-chat"
 ```
-
-不配置时，系统会使用离线模板生成设计方案，流程仍然可以完整运行。
+配置后设计方案会由 LLM 润色，效果图会尝试 AI 真实渲染。
