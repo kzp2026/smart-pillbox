@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from common import ensure_output_dir, resolve_latest_output_path
 
@@ -137,7 +137,7 @@ def create_render_image(path: Path, req_df: pd.DataFrame, product_name: str) -> 
     rounded_rect(draw, (40, 40, w - 40, h - 40), PALETTE["white"], PALETTE["line"])
 
     # 标题
-    draw.text((w // 2, 80), f"{product_name} 产品设计效果图", font=font_title, fill=PALETTE["ink"], anchor="mt")
+    draw.text((w // 2, 80), f"{product_name} 产品效果图", font=font_title, fill=PALETTE["ink"], anchor="mt")
 
     # 产品简图区域
     rounded_rect(draw, (60, 130, w - 60, 380), PALETTE["panel"], PALETTE["line"], radius=16)
@@ -156,57 +156,74 @@ def create_render_image(path: Path, req_df: pd.DataFrame, product_name: str) -> 
     img.save(path)
 
 
-def create_board(path: Path, image_dir: Path, req_df: pd.DataFrame, topic_df: pd.DataFrame, product_name: str) -> None:
+def paste_image_panel(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    image_path: Path,
+    box: tuple[int, int, int, int],
+    title: str,
+) -> None:
+    left, top, right, bottom = box
+    rounded_rect(draw, box, PALETTE["white"], PALETTE["line"], radius=18)
+    draw.text((left + 22, top + 16), title, font=load_font(18, bold=True), fill=PALETTE["ink"])
+    if not image_path.exists():
+        draw.text(((left + right) // 2, (top + bottom) // 2), "图片尚未生成", font=load_font(15), fill=PALETTE["muted"], anchor="mm")
+        return
+
+    try:
+        source = Image.open(image_path).convert("RGB")
+        target_width = max(1, right - left - 36)
+        target_height = max(1, bottom - top - 72)
+        fitted = ImageOps.contain(source, (target_width, target_height), Image.Resampling.LANCZOS)
+        x = left + (right - left - fitted.width) // 2
+        y = top + 58 + (target_height - fitted.height) // 2
+        canvas.paste(fitted, (x, y))
+    except Exception:
+        draw.text(((left + right) // 2, (top + bottom) // 2), "图片读取失败", font=load_font(15), fill=PALETTE["muted"], anchor="mm")
+
+
+def create_board(path: Path, images: dict[str, Path], req_df: pd.DataFrame, topic_df: pd.DataFrame, product_name: str) -> None:
     """生成产品设计展板"""
-    w, h = 1200, 900
+    w, h = 1600, 1000
     img = Image.new("RGB", (w, h), PALETTE["bg"])
     draw = ImageDraw.Draw(img)
     font_title = load_font(32, bold=True)
     font_section = load_font(20, bold=True)
-    font_body = load_font(14)
+    font_body = load_font(15)
 
-    # 展板标题区
-    rounded_rect(draw, (20, 20, w - 20, 100), PALETTE["blue"])
-    draw.text((w // 2, 70), f"{product_name} 产品设计展板", font=font_title, fill=PALETTE["white"], anchor="mm")
+    rounded_rect(draw, (20, 20, w - 20, 96), PALETTE["blue"])
+    draw.text((w // 2, 58), f"{product_name} 产品设计展板", font=font_title, fill=PALETTE["white"], anchor="mm")
 
-    # 左栏：需求分析
-    rounded_rect(draw, (20, 140, 580, 500), PALETTE["white"], PALETTE["line"])
-    draw.text((300, 160), "用户需求分析", font=font_section, fill=PALETTE["ink"], anchor="mt")
+    paste_image_panel(img, draw, images["render"], (20, 120, 800, 660), "产品效果图")
+    paste_image_panel(img, draw, images["exploded"], (820, 120, 1190, 380), "产品爆炸图")
+    paste_image_panel(img, draw, images["detail"], (1210, 120, 1580, 380), "产品细节图")
+    paste_image_panel(img, draw, images["three_view"], (820, 400, 1190, 660), "产品三视图")
+    paste_image_panel(img, draw, images["usage"], (1210, 400, 1580, 660), "产品使用效果图")
 
-    top_reqs = req_df.head(6) if not req_df.empty else []
-    y = 200
-    for _, row in enumerate(top_reqs.iterrows()):
-        row_data = row[1]
-        req_name = row_data.get("需求名称", row_data.get("设计机会点", ""))
-        importance = row_data.get("重要度", "")
-        draw_wrapped(draw, (40, y), f"• {req_name} (重要度: {importance})", font_body, PALETTE["ink"], 520)
-        y += 40
+    rounded_rect(draw, (20, 690, 780, 970), PALETTE["white"], PALETTE["line"], radius=18)
+    draw.text((42, 710), "核心用户需求", font=font_section, fill=PALETTE["ink"])
+    y = 752
+    if req_df.empty:
+        draw.text((42, y), "暂无需求数据", font=font_body, fill=PALETTE["muted"])
+    else:
+        for _, row in req_df.head(5).iterrows():
+            req_name = row.get("需求名称", row.get("设计机会点", ""))
+            importance = row.get("重要度", "")
+            text = f"• {req_name}" + (f"（重要度：{importance}）" if str(importance).strip() else "")
+            y += draw_wrapped(draw, (42, y), text, font_body, PALETTE["ink"], 710, line_gap=5) + 8
 
-    # 右栏：主题聚类
-    rounded_rect(draw, (620, 140, w - 20, 500), PALETTE["white"], PALETTE["line"])
-    draw.text((900, 160), "评论主题聚类", font=font_section, fill=PALETTE["ink"], anchor="mt")
+    rounded_rect(draw, (820, 690, 1580, 970), PALETTE["white"], PALETTE["line"], radius=18)
+    draw.text((842, 710), "评论主题与设计依据", font=font_section, fill=PALETTE["ink"])
+    y = 752
+    if topic_df.empty:
+        draw_wrapped(draw, (842, y), f"本展板基于{product_name}用户评论分析、需求映射与产品结构方案自动生成。", font_body, PALETTE["muted"], 710)
+    else:
+        for _, row in topic_df.head(5).iterrows():
+            topic_name = row.get("主题名称", "")
+            topic_kws = row.get("主题关键词", "")
+            y += draw_wrapped(draw, (842, y), f"• {topic_name}：{topic_kws}", font_body, PALETTE["ink"], 710, line_gap=5) + 8
 
-    y = 200
-    top_topics = topic_df.head(6) if not topic_df.empty else []
-    for _, row in enumerate(top_topics.iterrows()):
-        row_data = row[1]
-        topic_name = row_data.get("主题名称", "")
-        topic_kws = row_data.get("主题关键词", "")
-        draw_wrapped(draw, (640, y), f"• {topic_name}: {topic_kws}", font_body, PALETTE["ink"], 540)
-        y += 40
-
-    # 底部：产品设计
-    rounded_rect(draw, (20, 660, w - 20, h - 20), PALETTE["white"], PALETTE["line"])
-    draw.text((w // 2, 680), "产品设计方案概要", font=font_section, fill=PALETTE["ink"], anchor="mt")
-
-    design_text = (
-        f"本展板基于{product_name}用户评论数据的自然语言处理分析结果。"
-        "通过TF-IDF关键词提取、情感分析、主题聚类及需求-功能-结构映射，"
-        "从用户反馈中系统性推导产品设计方向与机会点。"
-    )
-    draw_wrapped(draw, (60, 720), design_text, font_body, PALETTE["ink"], 1100)
-
-    draw.text((w // 2, h - 40), "本展板由系统自动生成，为示意图", font=load_font(11), fill=PALETTE["muted"], anchor="mb")
+    draw.text((w - 32, h - 12), "基于用户评论数据自动生成", font=load_font(11), fill=PALETTE["muted"], anchor="rb")
     img.save(path)
     print(f"已生成展板：{path}")
 
@@ -219,6 +236,31 @@ def create_simple_placeholder(path: Path, label: str) -> None:
     rounded_rect(draw, (60, 60, w - 60, h - 60), PALETTE["white"], PALETTE["line"])
     draw.text((w // 2, h // 2), f"〔{label}〕", font=load_font(24), fill=PALETTE["muted"], anchor="mm")
     draw.text((w // 2, h - 40), "示意图 — 可替换为AI渲染图", font=load_font(12), fill=PALETTE["muted"], anchor="mb")
+    img.save(path)
+
+
+def create_three_view_placeholder(path: Path, product_name: str) -> None:
+    """生成包含正视图、侧视图和俯视图的离线三视图示意图。"""
+    w, h = 1200, 620
+    img = Image.new("RGB", (w, h), PALETTE["bg"])
+    draw = ImageDraw.Draw(img)
+    draw.text((w // 2, 42), f"{product_name} 产品三视图", font=load_font(28, bold=True), fill=PALETTE["ink"], anchor="mt")
+
+    panels = [
+        (50, 110, 390, 540, "正视图", (135, 180, 305, 420)),
+        (430, 110, 770, 540, "侧视图", (540, 180, 660, 420)),
+        (810, 110, 1150, 540, "俯视图", (895, 245, 1065, 355)),
+    ]
+    for left, top, right, bottom, label, body_box in panels:
+        rounded_rect(draw, (left, top, right, bottom), PALETTE["white"], PALETTE["line"], radius=18)
+        draw.text(((left + right) // 2, top + 28), label, font=load_font(18, bold=True), fill=PALETTE["ink"], anchor="mt")
+        rounded_rect(draw, body_box, PALETTE["panel"], PALETTE["blue"], radius=24, width=3)
+        body_left, body_top, body_right, body_bottom = body_box
+        draw.line((body_left, body_bottom + 24, body_right, body_bottom + 24), fill=PALETTE["muted"], width=2)
+        draw.line((body_left, body_bottom + 16, body_left, body_bottom + 32), fill=PALETTE["muted"], width=2)
+        draw.line((body_right, body_bottom + 16, body_right, body_bottom + 32), fill=PALETTE["muted"], width=2)
+
+    draw.text((w // 2, h - 26), "离线结构示意图；配置图像生成密钥后将自动替换为写实三视图", font=load_font(13), fill=PALETTE["muted"], anchor="mb")
     img.save(path)
 
 
@@ -259,10 +301,17 @@ def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -
             quality="standard",
             n=1,
         )
-        image_url = response.data[0].url
+        image_data = response.data[0]
+        image_url = getattr(image_data, "url", None)
         if image_url:
             import urllib.request
             urllib.request.urlretrieve(image_url, str(output_path))
+            print(f"AI渲染完成：{output_path}")
+            return True
+
+        image_base64 = getattr(image_data, "b64_json", None)
+        if image_base64:
+            output_path.write_bytes(base64.b64decode(image_base64))
             print(f"AI渲染完成：{output_path}")
             return True
     except Exception as e:
@@ -299,20 +348,23 @@ def build_image_prompts(product_name: str, req_df: pd.DataFrame, struct_df: pd.D
 
     return f"""# {product_name} 产品设计图像生成提示词
 
-## 1. 设计效果图
+## 1. 产品效果图
 Prompt: 专业的{product_name}产品设计渲染图，展示产品整体外观和核心功能模块，干净的白色背景，柔和的工作室灯光，高品质工业设计摄影风格，无品牌logo，无水印
 
-## 2. 产品细节图
-Prompt: {product_name}产品细节特写渲染图，展示关键功能组件和材质质感，微距摄影品质，干净背景，工业设计展示风格
-
-## 3. 使用场景图  
-Prompt: 真实生活场景中用户使用{product_name}的照片级渲染图，温馨自然光线，现代家居环境，人物自然互动，充满生活气息
-
-## 4. 产品爆炸图
+## 2. 产品爆炸图
 Prompt: {product_name}产品结构爆炸图，严格依据以下部件进行拆分：{structure_context}。所有零部件沿垂直装配轴依次分离悬浮，保持正确装配顺序、统一透视、等距间隔且互不遮挡，清晰展示外壳、承力结构、连接方式和功能组件之间的装配关系；右侧设置简洁部件名称与水平引导线，白色背景，等距轴测视角，照片级工业设计产品渲染，engineering exploded view，photorealistic，industrial design visualization，no logo，no watermark
 
-## 5. 产品展板
-Prompt: {product_name}产品设计研究生课题展板，包含产品渲染图、需求分析、功能结构映射图表，学术展示风格，信息图表布局清晰
+## 3. 产品细节图
+Prompt: {product_name}产品细节特写渲染图，展示关键功能组件、连接方式、操作界面、人体工学细节和材质工艺，微距摄影品质，干净背景，photorealistic，industrial design visualization，no logo，no watermark
+
+## 4. 产品三视图
+Prompt: {product_name}工业设计三视图，同一产品以统一比例展示正视图、侧视图和俯视图，三个正交视图水平排列并严格对齐，准确呈现轮廓、结构分区、操作区域与主要尺寸关系，白色背景，无透视变形，orthographic projection，photorealistic，industrial design visualization，no logo，no watermark
+
+## 5. 设计展板
+Prompt: {product_name}产品设计研究生课题展板，包含产品效果图、爆炸图、细节图、三视图、产品使用效果图、需求分析和功能结构映射，学术展示风格，信息层级清晰，photorealistic，industrial design visualization，no logo，no watermark
+
+## 6. 产品使用效果图
+Prompt: 真实目标用户在自然生活场景中使用{product_name}的照片级渲染图，准确展示人物动作、产品尺度、空间关系和核心功能，温馨自然光线，现代真实环境，photorealistic，industrial design visualization，no logo，no watermark
 
 ---
 关键词参考：{top_keywords}
@@ -352,7 +404,7 @@ def maybe_enhance_image_prompts(
     requirements = req_df.head(8).to_dict(orient="records") if not req_df.empty else []
     topics = topic_df.head(6).to_dict(orient="records") if not topic_df.empty else []
     structures = struct_df.head(12).to_dict(orient="records") if not struct_df.empty else []
-    prompt = f"""你是工业设计师和产品可视化提示词专家。请基于以下真实分析数据，为{product_name}生成五类写实产品渲染提示词。
+    prompt = f"""你是工业设计师和产品可视化提示词专家。请基于以下真实分析数据，为{product_name}生成六类写实产品渲染提示词。
 
 用户需求：{requirements}
 评论主题：{topics}
@@ -360,24 +412,26 @@ def maybe_enhance_image_prompts(
 
 要求：
 1. 不得把产品误写成智能药盒或其他产品。
-2. 设计效果图要说明造型、材质、颜色、核心结构、视角、灯光和背景。
-3. 细节图要展示关键连接、操作界面、材料工艺和人体工学细节。
-4. 场景图要描述真实目标用户、动作、空间关系和使用环境。
-5. 爆炸图必须是独立图片，严格使用“产品结构”中的真实部件；零部件沿装配轴分层拆开，保持正确装配顺序、等距间隔、统一透视且互不遮挡，体现连接和装配关系，不得把完整产品直接摆在画面中代替爆炸结构。
-6. 爆炸图采用白色背景、等距轴测视角、照片级工业设计渲染，部件名称排列在右侧并使用水平引导线标注，构图参考专业产品说明书和工程爆炸图。
-7. 展板图要包含主效果图、三视图、独立爆炸图、场景图和需求要点，但不要生成难以辨认的大段文字。
+2. 产品效果图要说明造型、材质、颜色、核心结构、视角、灯光和背景。
+3. 爆炸图必须严格使用“产品结构”中的真实部件，沿装配轴分层拆开并保持正确装配关系。
+4. 产品细节图要展示关键连接、操作界面、材料工艺和人体工学细节。
+5. 产品三视图必须包含统一比例且严格对齐的正视图、侧视图和俯视图，不得使用透视视角。
+6. 设计展板要整合效果图、爆炸图、细节图、三视图、使用效果图和需求要点，避免难以辨认的大段文字。
+7. 产品使用效果图要描述真实目标用户、动作、空间关系和使用环境。
 8. 每条提示词都必须强调 photorealistic、industrial design visualization、no logo、no watermark。
-9. 严格按下列 Markdown 格式输出，只能包含五个章节，每个章节恰好一行以 Prompt: 开头的完整提示词：
+9. 严格按下列 Markdown 格式输出，只能包含六个章节，每个章节恰好一行以 Prompt: 开头的完整提示词：
 
-## 1. 设计效果图
+## 1. 产品效果图
 Prompt: ...
-## 2. 产品细节图
+## 2. 产品爆炸图
 Prompt: ...
-## 3. 使用场景图
+## 3. 产品细节图
 Prompt: ...
-## 4. 产品爆炸图
+## 4. 产品三视图
 Prompt: ...
-## 5. 产品展板
+## 5. 设计展板
+Prompt: ...
+## 6. 产品使用效果图
 Prompt: ...
 """
 
@@ -393,7 +447,7 @@ Prompt: ...
         )
         content = response.choices[0].message.content or ""
         prompt_lines = [line for line in content.splitlines() if line.strip().startswith("Prompt:")]
-        if len(prompt_lines) == 5:
+        if len(prompt_lines) == 6:
             return f"# {product_name} 产品设计图像生成提示词\n\n{content.strip()}\n", f"DeepSeek增强：{model}"
     except Exception as exc:
         print(f"DeepSeek 提示词增强失败，使用规则模板：{exc}")
@@ -402,7 +456,7 @@ Prompt: ...
 
 
 def extract_prompt_lines(prompts_text: str) -> list[str]:
-    """按固定顺序提取五类图片提示词。"""
+    """按固定顺序提取六类图片提示词。"""
     prompts = []
     for line in prompts_text.splitlines():
         stripped = line.strip()
@@ -439,11 +493,12 @@ def main() -> None:
 
     # 定义输出图片路径
     images = {
-        "render": image_dir / f"{product_name}设计效果图.png",
-        "detail": image_dir / f"{product_name}细节图.png",
-        "scenario": image_dir / f"{product_name}场景使用效果图.png",
+        "render": image_dir / f"{product_name}产品效果图.png",
         "exploded": image_dir / f"{product_name}爆炸图.png",
+        "detail": image_dir / f"{product_name}细节图.png",
+        "three_view": image_dir / f"{product_name}产品三视图.png",
         "board": image_dir / f"{product_name}产品设计展板.png",
+        "usage": image_dir / f"{product_name}产品使用效果图.png",
     }
 
     # 生成图像提示词
@@ -465,25 +520,25 @@ def main() -> None:
             images["render"], "1024x1024"
         ) if prompt_lines else False
 
-        scenario_ok = generate_ai_image(
-            prompt_lines[2],
-            images["scenario"], "1024x1024"
-        ) if len(prompt_lines) > 2 else False
-
         exploded_ok = generate_ai_image(
-            prompt_lines[3],
+            prompt_lines[1],
             images["exploded"], "1024x1792"
-        ) if len(prompt_lines) > 3 else False
-
-        board_ok = generate_ai_image(
-            prompt_lines[4],
-            images["board"], "1792x1024"
-        ) if len(prompt_lines) > 4 else False
+        ) if len(prompt_lines) > 1 else False
 
         detail_ok = generate_ai_image(
-            prompt_lines[1],
+            prompt_lines[2],
             images["detail"], "1024x1024"
-        ) if len(prompt_lines) > 1 else False
+        ) if len(prompt_lines) > 2 else False
+
+        three_view_ok = generate_ai_image(
+            prompt_lines[3],
+            images["three_view"], "1792x1024"
+        ) if len(prompt_lines) > 3 else False
+
+        usage_ok = generate_ai_image(
+            prompt_lines[5],
+            images["usage"], "1024x1024"
+        ) if len(prompt_lines) > 5 else False
     else:
         print("未配置 IMAGE_API_KEY 或 OPENAI_API_KEY，设计图片将生成离线示意图；如需写实渲染，请在 Streamlit Cloud Secrets 中配置图像生成密钥。")
 
@@ -495,22 +550,25 @@ def main() -> None:
     if not images["detail"].exists():
         create_simple_placeholder(images["detail"], f"{product_name} 细节图")
 
-    if not images["scenario"].exists():
-        create_simple_placeholder(images["scenario"], f"{product_name} 场景使用图")
-
     if not images["exploded"].exists():
         create_simple_placeholder(images["exploded"], f"{product_name} 产品爆炸图")
 
-    # 展板始终用 PIL 生成（AI展板效果不稳定）
-    create_board(images["board"], image_dir, req_df, topic_df, product_name)
+    if not images["three_view"].exists():
+        create_three_view_placeholder(images["three_view"], product_name)
+
+    if not images["usage"].exists():
+        create_simple_placeholder(images["usage"], f"{product_name} 产品使用效果图")
+
+    create_board(images["board"], images, req_df, topic_df, product_name)
 
     # 生成图片清单
     manifest = pd.DataFrame([
-        {"图像类型": "设计效果图", "文件路径": str(images["render"]), "用途": f"展示{product_name}整体外观与核心功能"},
-        {"图像类型": "细节图", "文件路径": str(images["detail"]), "用途": f"展示{product_name}关键组件与材质"},
-        {"图像类型": "场景使用效果图", "文件路径": str(images["scenario"]), "用途": f"展示{product_name}真实使用场景"},
+        {"图像类型": "产品效果图", "文件路径": str(images["render"]), "用途": f"展示{product_name}整体外观与核心功能"},
         {"图像类型": "产品爆炸图", "文件路径": str(images["exploded"]), "用途": f"展示{product_name}零部件、装配顺序与结构关系"},
+        {"图像类型": "产品细节图", "文件路径": str(images["detail"]), "用途": f"展示{product_name}关键组件与材质工艺"},
+        {"图像类型": "产品三视图", "文件路径": str(images["three_view"]), "用途": f"展示{product_name}正视图、侧视图和俯视图"},
         {"图像类型": "产品设计展板", "文件路径": str(images["board"]), "用途": "用于论文答辩、课程展示或设计汇报"},
+        {"图像类型": "产品使用效果图", "文件路径": str(images["usage"]), "用途": f"展示{product_name}真实使用场景"},
         {"图像类型": "图像生成提示词", "文件路径": str(prompt_path), "用途": "可复制到图像生成模型进一步渲染"},
     ])
     manifest_path = image_dir / "设计图像清单.xlsx"

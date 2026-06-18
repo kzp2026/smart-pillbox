@@ -92,11 +92,12 @@ def get_download_files() -> list[str]:
         "import_neo4j.cypher",
         f"{p}产品设计方案.docx",
         f"{p}产品设计方案.txt",
-        f"design_images/{p}设计效果图.png",
-        f"design_images/{p}细节图.png",
-        f"design_images/{p}场景使用效果图.png",
+        f"design_images/{p}产品效果图.png",
         f"design_images/{p}爆炸图.png",
+        f"design_images/{p}细节图.png",
+        f"design_images/{p}产品三视图.png",
         f"design_images/{p}产品设计展板.png",
+        f"design_images/{p}产品使用效果图.png",
         "design_images/设计图像生成提示词.txt",
         "design_images/设计图像清单.xlsx",
     ]
@@ -216,12 +217,22 @@ def show_downloads() -> None:
         st.info("还没有生成结果，请先上传数据并运行分析。")
 
 
-def render_image(rel_path: str, caption: str) -> None:
+def render_design_image_card(rel_path: str, title: str, description: str) -> None:
     full = resolve_output_path(rel_path)
+    st.subheader(title)
+    st.caption(description)
     if full.exists():
-        st.image(str(full), caption=caption, use_container_width=True)
+        st.image(str(full), use_container_width=True)
+        st.download_button(
+            label=f"下载{title}",
+            data=full.read_bytes(),
+            file_name=full.name,
+            mime="image/png",
+            key=f"download_{rel_path}",
+            use_container_width=True,
+        )
     else:
-        st.caption(f"⏳ {caption} 尚未生成")
+        st.info(f"{title}尚未生成，请先运行“08 设计图片”。")
 
 
 # =========================
@@ -385,19 +396,27 @@ with tabs[6]:
         st.info("设计方案尚未生成。")
 
 with tabs[7]:
-    st.header("设计图片与展板")
+    st.header("设计图片")
+    st.caption("完整输出产品效果图、爆炸图、细节图、三视图、设计展板和产品使用效果图。")
     if deepseek_configured:
         st.success("DeepSeek 已连接：将依据需求、痛点和主题聚类优化工业设计渲染提示词。")
     if not image_api_configured:
         st.warning("DeepSeek 不直接生成图片。当前未配置图像生成密钥，因此会生成专业提示词和离线示意图；写实渲染图仍需单独配置 IMAGE_API_KEY。")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        render_image(f"design_images/{p}设计效果图.png", "产品设计效果图")
-        render_image(f"design_images/{p}场景使用效果图.png", "场景使用效果图")
-    with col_b:
-        render_image(f"design_images/{p}细节图.png", "产品细节图")
-        render_image(f"design_images/{p}爆炸图.png", "产品爆炸图")
-    render_image(f"design_images/{p}产品设计展板.png", "产品设计展板")
+
+    image_cards = [
+        (f"design_images/{p}产品效果图.png", "产品效果图", "展示整体造型、材质、配色与核心功能。"),
+        (f"design_images/{p}爆炸图.png", "产品爆炸图", "展示零部件、装配顺序与结构关系。"),
+        (f"design_images/{p}细节图.png", "产品细节图", "展示关键组件、交互区域与材料工艺。"),
+        (f"design_images/{p}产品三视图.png", "产品三视图", "展示正视图、侧视图和俯视图。"),
+        (f"design_images/{p}产品设计展板.png", "设计展板", "整合设计图、用户需求与研究结论。"),
+        (f"design_images/{p}产品使用效果图.png", "产品使用效果图", "展示目标用户、使用动作与真实环境。"),
+    ]
+    for start in range(0, len(image_cards), 3):
+        columns = st.columns(3)
+        for column, card in zip(columns, image_cards[start:start + 3]):
+            with column:
+                with st.container(border=True):
+                    render_design_image_card(*card)
 
     prompt_path = resolve_output_path("design_images/设计图像生成提示词.txt")
     if prompt_path.exists():
