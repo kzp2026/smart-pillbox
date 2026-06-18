@@ -303,6 +303,8 @@ with st.sidebar:
 
 # --- 主区域 ---
 p = get_product_name()
+deepseek_configured = bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("LLM_API_KEY"))
+image_api_configured = bool(os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY"))
 st.title(f"📊 {p} — 用户评论驱动的产品创新智能体")
 st.caption("上传任意产品评论数据 → 自动完成 NLP 分析 → 生成产品设计方案与设计图")
 
@@ -371,6 +373,10 @@ with tabs[5]:
 
 with tabs[6]:
     st.header(f"{p} 产品设计方案")
+    if deepseek_configured:
+        st.success("DeepSeek 已连接：设计方案将根据当前评论分析结果进行增强。")
+    else:
+        st.info("未配置 DeepSeek API，当前使用离线规则生成设计方案。")
     txt_path = resolve_output_path(f"{p}产品设计方案.txt")
     if txt_path.exists():
         st.markdown(txt_path.read_text(encoding="utf-8"))
@@ -379,8 +385,10 @@ with tabs[6]:
 
 with tabs[7]:
     st.header("设计图片与展板")
-    if not (os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")):
-        st.warning("当前未配置图像生成密钥，系统会生成离线示意图；如需写实产品渲染图，请在 Streamlit Cloud Secrets 中配置 IMAGE_API_KEY 或 OPENAI_API_KEY。")
+    if deepseek_configured:
+        st.success("DeepSeek 已连接：将依据需求、痛点和主题聚类优化工业设计渲染提示词。")
+    if not image_api_configured:
+        st.warning("DeepSeek 不直接生成图片。当前未配置图像生成密钥，因此会生成专业提示词和离线示意图；写实渲染图仍需单独配置 IMAGE_API_KEY。")
     col_a, col_b = st.columns(2)
     with col_a:
         render_image(f"design_images/{p}设计效果图.png", "产品设计效果图")

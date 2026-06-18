@@ -29,12 +29,15 @@
 4. 在各标签页查看：评论清洗、关键词、痛点、主题聚类、映射数据库、知识图谱、设计方案、设计图
 5. 在"下载中心"下载所有实验结果文件
 
-## 4. 可选大模型增强
+## 4. DeepSeek 增强
 
-在 Streamlit Cloud 的 `Secrets` 中配置：
+在 Streamlit Cloud 的“管理应用 → 应用设置 → 秘密”中配置：
 ```toml
-LLM_API_KEY = "你的密钥"
-LLM_BASE_URL = "https://api.deepseek.com"
-LLM_MODEL = "deepseek-chat"
+DEEPSEEK_API_KEY = "sk-你的DeepSeek密钥"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
 ```
-配置后设计方案会由 LLM 润色，效果图会尝试 AI 真实渲染。
+
+配置后，设计方案会由 DeepSeek 润色，第 8 阶段会依据需求、痛点和主题聚类生成更专业的工业设计渲染提示词。
+
+DeepSeek 的托管 API 不提供图片生成端点，因此它不能直接输出写实效果图。写实图片需要另外配置支持图像生成的 `IMAGE_API_KEY`、`IMAGE_BASE_URL` 和 `IMAGE_MODEL`；未配置时系统仍会输出 DeepSeek 提示词和离线示意图。

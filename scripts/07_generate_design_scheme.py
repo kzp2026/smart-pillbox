@@ -97,19 +97,32 @@ def build_offline_scheme(
 本方案从用户评论数据出发，通过自然语言处理和主题建模技术，系统性地将用户需求映射为产品功能和结构设计建议。输出的映射数据库和知识图谱文件可进一步用于可视化展示需求关联、功能支撑关系和结构实现逻辑。"""
 
 
+def get_llm_config() -> tuple[str | None, str | None, str, str]:
+    """读取 DeepSeek 或其他 OpenAI 兼容文本模型配置。"""
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+    api_key = deepseek_key or os.getenv("LLM_API_KEY")
+    if deepseek_key:
+        base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        model = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+        return api_key, base_url, model, "DeepSeek"
+
+    base_url = os.getenv("LLM_BASE_URL") or None
+    model = os.getenv("LLM_MODEL", "deepseek-v4-flash")
+    provider = "DeepSeek" if base_url and "deepseek" in base_url.lower() else "兼容大模型"
+    return api_key, base_url, model, provider
+
+
 def maybe_llm_enhance(base_scheme: str, product_name: str) -> tuple[str, str]:
-    api_key = os.getenv("LLM_API_KEY")
+    api_key, base_url, model, provider = get_llm_config()
     if not api_key:
         return base_scheme, "离线模板生成"
 
     try:
         from openai import OpenAI
     except Exception:
-        return base_scheme + "\n\n> 注：检测到 LLM_API_KEY，但未安装 openai 包，已使用离线模板生成。", "离线模板生成"
+        return base_scheme + "\n\n> 注：检测到大模型密钥，但未安装 openai 包，已使用离线模板生成。", "离线模板生成"
 
     try:
-        base_url = os.getenv("LLM_BASE_URL") or None
-        model = os.getenv("LLM_MODEL", "deepseek-chat")
         client = OpenAI(api_key=api_key, base_url=base_url)
         prompt = (
             f"请在不编造数据的前提下，把下面的{product_name}产品设计方案润色为研究生论文实验输出风格，"
@@ -123,7 +136,7 @@ def maybe_llm_enhance(base_scheme: str, product_name: str) -> tuple[str, str]:
         )
         content = response.choices[0].message.content
         if content and len(content.strip()) > 200:
-            return content, f"大模型增强：{model}"
+            return content, f"{provider}增强：{model}"
     except Exception as exc:
         return base_scheme + f"\n\n> 注：大模型增强失败，已使用离线模板生成。错误信息：{exc}", "离线模板生成"
 

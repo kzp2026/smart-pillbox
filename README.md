@@ -34,16 +34,24 @@ streamlit run app.py
 
 ## 4. AI 增强（可选）
 
-设置环境变量启用大模型增强文案和 AI 真实渲染：
+设置环境变量启用 DeepSeek 增强文案和工业设计渲染提示词：
 ```bash
-set LLM_API_KEY=你的密钥
-set LLM_BASE_URL=https://api.deepseek.com   # 可选
-set LLM_MODEL=deepseek-chat                  # 可选
+set DEEPSEEK_API_KEY=你的密钥
+set DEEPSEEK_BASE_URL=https://api.deepseek.com
+set DEEPSEEK_MODEL=deepseek-v4-flash
 ```
 
 配置后：
-- 第 7 阶段会自动用 LLM 润色设计方案
-- 第 8 阶段会尝试用 DALL-E 生成真实感产品渲染图
+- 第 7 阶段会自动用 DeepSeek 润色设计方案
+- 第 8 阶段会用 DeepSeek 根据需求、痛点和主题聚类优化四类渲染提示词
+- DeepSeek 本身不提供图片生成端点；写实产品渲染图仍需另外配置 `IMAGE_API_KEY`
+
+Streamlit Cloud 请在“管理应用 → 应用设置 → 秘密”中使用根级配置：
+```toml
+DEEPSEEK_API_KEY = "sk-你的DeepSeek密钥"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
+```
 
 不配置时系统使用离线模板和示意图，流程仍可完整运行。
 
@@ -51,5 +59,6 @@ set LLM_MODEL=deepseek-chat                  # 可选
 ```bash
 pip install -r requirements.txt
 pip install bertopic      # 可选，失败时自动切换 KMeans
-pip install openai        # 可选，用于 LLM 增强和 AI 渲染
 ```
+
+`openai` 已包含在 `requirements.txt` 中，用于 DeepSeek 和其他 OpenAI 兼容接口。
