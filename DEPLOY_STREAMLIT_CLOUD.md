@@ -41,3 +41,14 @@ DEEPSEEK_MODEL = "deepseek-v4-flash"
 配置后，设计方案会由 DeepSeek 润色，第 8 阶段会依据需求、痛点和主题聚类生成更专业的工业设计渲染提示词。
 
 DeepSeek 的托管 API 不提供图片生成端点，因此它不能直接输出写实效果图。写实图片需要另外配置支持图像生成的 `IMAGE_API_KEY`、`IMAGE_BASE_URL` 和 `IMAGE_MODEL`；未配置时系统仍会输出 DeepSeek 提示词和离线示意图。
+
+写实渲染配置示例：
+```toml
+IMAGE_API_KEY = "你的图片模型密钥"
+IMAGE_MODEL = "gpt-image-1"
+IMAGE_QUALITY = "medium"
+# 仅兼容接口需要：
+# IMAGE_BASE_URL = "https://你的接口地址/v1"
+```
+
+配置保存并重启后，进入“设计图片”页点击“生成/重新生成六类写实渲染图”。不要把密钥写入代码或提交到 GitHub。

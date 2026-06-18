@@ -4,6 +4,7 @@ import subprocess
 import sys
 import os
 import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -31,6 +32,8 @@ STAGES = [
     ("07 设计方案", "07_generate_design_scheme.py", "{product}产品设计方案.docx"),
     ("08 设计图片", "08_generate_design_visuals.py", "design_images/{product}产品设计展板.png"),
 ]
+
+DESIGN_IMAGE_STAGES = [STAGES[index] for index in (0, 1, 2, 3, 4, 6, 7)]
 
 
 def get_product_name() -> str:
@@ -235,6 +238,16 @@ def render_design_image_card(rel_path: str, title: str, description: str) -> Non
         st.info(f"{title}尚未生成，请先运行“08 设计图片”。")
 
 
+def load_render_status() -> dict:
+    status_path = resolve_output_path("design_images/写实渲染状态.json")
+    if not status_path.exists():
+        return {}
+    try:
+        return json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 # =========================
 # 3. 页面 UI
 # =========================
@@ -400,8 +413,62 @@ with tabs[7]:
     st.caption("完整输出产品效果图、爆炸图、细节图、三视图、设计展板和产品使用效果图。")
     if deepseek_configured:
         st.success("DeepSeek 已连接：将依据需求、痛点和主题聚类优化工业设计渲染提示词。")
-    if not image_api_configured:
-        st.warning("DeepSeek 不直接生成图片。当前未配置图像生成密钥，因此会生成专业提示词和离线示意图；写实渲染图仍需单独配置 IMAGE_API_KEY。")
+
+    with st.expander("如何启用写实渲染", expanded=not image_api_configured):
+        st.markdown(
+            "在 Streamlit Cloud 打开 **Manage app → Settings → Secrets**，添加支持图片生成的 API 配置。"
+            "DeepSeek 只负责优化提示词，不能替代图片生成模型。"
+        )
+        st.code(
+            'IMAGE_API_KEY = "你的图片模型密钥"\n'
+            'IMAGE_MODEL = "gpt-image-1"\n'
+            '# 使用兼容接口时再填写：\n'
+            '# IMAGE_BASE_URL = "https://你的接口地址/v1"\n'
+            '# IMAGE_QUALITY = "medium"',
+            language="toml",
+        )
+        st.caption("保存 Secrets 后等待应用重启，再点击下方按钮重新生成。密钥不要上传到 GitHub。")
+
+    generate_label = "🎨 生成/重新生成六类写实渲染图" if image_api_configured else "🧩 生成六类离线示意图"
+    if st.button(
+        generate_label,
+        type="primary",
+        use_container_width=True,
+        disabled=input_path is None,
+        help="自动补跑缺失的分析阶段，并重新执行 08 设计图片。",
+    ):
+        generation_failed = False
+        with st.status("正在准备设计数据并生成六类图片...", expanded=True) as status:
+            for stage_name, script_name, stage_output in DESIGN_IMAGE_STAGES:
+                if stage_name != "08 设计图片" and file_ready(stage_output):
+                    st.write(f"✅ {stage_name} 已有结果，跳过")
+                    continue
+                st.write(f"⏳ {stage_name}...")
+                result = run_stage(script_name, input_path)
+                if result.returncode != 0:
+                    error_text = (result.stderr or result.stdout or "未知错误").strip()
+                    st.error(f"❌ {stage_name} 失败：{error_text[:800]}")
+                    status.update(label=f"{stage_name} 失败", state="error")
+                    generation_failed = True
+                    break
+                st.write(f"✅ {stage_name} 完成")
+            if not generation_failed:
+                status.update(label="六类设计图片已生成", state="complete")
+        st.cache_data.clear()
+
+    render_status = load_render_status()
+    if image_api_configured:
+        success_count = int(render_status.get("ai_success_count", 0))
+        target_count = int(render_status.get("ai_target_count", 5))
+        model_name = render_status.get("model") or os.getenv("IMAGE_MODEL", "已配置模型")
+        if render_status and success_count == target_count:
+            st.success(f"图片模型已连接：{model_name}，本次 {success_count}/{target_count} 张写实图生成成功，展板已自动合成。")
+        elif render_status:
+            st.warning(f"图片模型已配置，但本次仅 {success_count}/{target_count} 张写实图生成成功；失败项目已自动回退为离线示意图。")
+        else:
+            st.info("图片模型密钥已配置。点击上方按钮生成六类写实渲染图。")
+    else:
+        st.warning("当前未配置图片生成密钥，只能生成专业提示词和离线示意图；写实渲染需要 IMAGE_API_KEY。")
 
     image_cards = [
         (f"design_images/{p}产品效果图.png", "产品效果图", "展示整体造型、材质、配色与核心功能。"),

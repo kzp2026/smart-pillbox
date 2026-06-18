@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import os
 import subprocess
 import sys
@@ -268,7 +269,7 @@ def create_three_view_placeholder(path: Path, product_name: str) -> None:
 # 4. AI 真实渲染（DALL-E 兼容接口）
 # =========================
 
-def get_image_api_config() -> tuple[str | None, str | None, str]:
+def get_image_api_config() -> tuple[str | None, str | None, str, str]:
     """读取图像生成接口配置。
 
     Streamlit Cloud 中建议配置 IMAGE_API_KEY 或 OPENAI_API_KEY。
@@ -276,13 +277,24 @@ def get_image_api_config() -> tuple[str | None, str | None, str]:
     """
     api_key = os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("IMAGE_BASE_URL") or None
-    model = os.getenv("IMAGE_MODEL", "dall-e-3")
-    return api_key, base_url, model
+    model = os.getenv("IMAGE_MODEL", "gpt-image-1")
+    default_quality = "medium" if model.startswith("gpt-image") else "standard"
+    quality = os.getenv("IMAGE_QUALITY", default_quality)
+    return api_key, base_url, model, quality
+
+
+def compatible_image_size(model: str, size: str) -> str:
+    if not model.startswith("gpt-image"):
+        return size
+    return {
+        "1024x1792": "1024x1536",
+        "1792x1024": "1536x1024",
+    }.get(size, size)
 
 
 def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -> bool:
     """使用 OpenAI Images 兼容接口生成真实感渲染图。"""
-    api_key, base_url, model = get_image_api_config()
+    api_key, base_url, model, quality = get_image_api_config()
     if not api_key:
         return False
 
@@ -297,8 +309,8 @@ def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -
         response = client.images.generate(
             model=model,
             prompt=prompt,
-            size=size,
-            quality="standard",
+            size=compatible_image_size(model, size),
+            quality=quality,
             n=1,
         )
         image_data = response.data[0]
@@ -315,7 +327,7 @@ def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -
             print(f"AI渲染完成：{output_path}")
             return True
     except Exception as e:
-        print(f"DALL-E 生成失败，尝试备用方式：{e}")
+        print(f"图片模型生成失败，已回退为离线示意图：{e}")
 
     return False
 
@@ -477,7 +489,7 @@ def main() -> None:
     args = parser.parse_args()
 
     product_name = args.product_name
-    image_api_key, _, image_model = get_image_api_config()
+    image_api_key, image_base_url, image_model, image_quality = get_image_api_config()
     use_ai = args.ai_render or bool(image_api_key)
 
     output_dir = ensure_output_dir(args.output_dir)
@@ -511,31 +523,38 @@ def main() -> None:
     print(f"渲染提示词生成方式：{prompt_method}")
 
     # 尝试 AI 渲染
+    ai_results = {
+        "render": False,
+        "exploded": False,
+        "detail": False,
+        "three_view": False,
+        "usage": False,
+    }
     if use_ai:
         print(f"尝试 AI 真实渲染，图像模型：{image_model}")
         # 准备各图片的专用 prompt
         prompt_lines = extract_prompt_lines(prompts_text)
-        render_ok = generate_ai_image(
+        ai_results["render"] = generate_ai_image(
             prompt_lines[0],
             images["render"], "1024x1024"
         ) if prompt_lines else False
 
-        exploded_ok = generate_ai_image(
+        ai_results["exploded"] = generate_ai_image(
             prompt_lines[1],
             images["exploded"], "1024x1792"
         ) if len(prompt_lines) > 1 else False
 
-        detail_ok = generate_ai_image(
+        ai_results["detail"] = generate_ai_image(
             prompt_lines[2],
             images["detail"], "1024x1024"
         ) if len(prompt_lines) > 2 else False
 
-        three_view_ok = generate_ai_image(
+        ai_results["three_view"] = generate_ai_image(
             prompt_lines[3],
             images["three_view"], "1792x1024"
         ) if len(prompt_lines) > 3 else False
 
-        usage_ok = generate_ai_image(
+        ai_results["usage"] = generate_ai_image(
             prompt_lines[5],
             images["usage"], "1024x1024"
         ) if len(prompt_lines) > 5 else False
@@ -561,6 +580,21 @@ def main() -> None:
 
     create_board(images["board"], images, req_df, topic_df, product_name)
 
+    ai_success_count = sum(ai_results.values())
+    render_status = {
+        "image_api_configured": bool(image_api_key),
+        "model": image_model if image_api_key else None,
+        "quality": image_quality if image_api_key else None,
+        "custom_base_url": bool(image_base_url),
+        "ai_success_count": ai_success_count,
+        "ai_target_count": len(ai_results),
+        "images": ai_results,
+    }
+    status_path = image_dir / "写实渲染状态.json"
+    status_path.write_text(json.dumps(render_status, ensure_ascii=False, indent=2), encoding="utf-8")
+    if use_ai:
+        print(f"AI写实渲染成功：{ai_success_count}/{len(ai_results)}")
+
     # 生成图片清单
     manifest = pd.DataFrame([
         {"图像类型": "产品效果图", "文件路径": str(images["render"]), "用途": f"展示{product_name}整体外观与核心功能"},
@@ -570,6 +604,7 @@ def main() -> None:
         {"图像类型": "产品设计展板", "文件路径": str(images["board"]), "用途": "用于论文答辩、课程展示或设计汇报"},
         {"图像类型": "产品使用效果图", "文件路径": str(images["usage"]), "用途": f"展示{product_name}真实使用场景"},
         {"图像类型": "图像生成提示词", "文件路径": str(prompt_path), "用途": "可复制到图像生成模型进一步渲染"},
+        {"图像类型": "写实渲染状态", "文件路径": str(status_path), "用途": "记录图片模型、成功数量和回退状态"},
     ])
     manifest_path = image_dir / "设计图像清单.xlsx"
     with pd.ExcelWriter(manifest_path, engine="openpyxl") as writer:

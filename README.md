@@ -46,6 +46,17 @@ set DEEPSEEK_MODEL=deepseek-v4-flash
 - 第 8 阶段会用 DeepSeek 根据需求、痛点和主题聚类优化六类渲染提示词
 - DeepSeek 本身不提供图片生成端点；写实产品渲染图仍需另外配置 `IMAGE_API_KEY`
 
+写实渲染建议配置：
+```toml
+IMAGE_API_KEY = "你的图片模型密钥"
+IMAGE_MODEL = "gpt-image-1"
+IMAGE_QUALITY = "medium"
+# 使用 OpenAI Images 兼容接口时再填写：
+# IMAGE_BASE_URL = "https://你的接口地址/v1"
+```
+
+保存 Streamlit Secrets 并等待应用重启后，在“设计图片”页点击“生成/重新生成六类写实渲染图”。系统会自动补跑缺失的前置阶段，并显示写实图成功数量；失败项目会保留离线示意图。
+
 Streamlit Cloud 请在“管理应用 → 应用设置 → 秘密”中使用根级配置：
 ```toml
 DEEPSEEK_API_KEY = "sk-你的DeepSeek密钥"
