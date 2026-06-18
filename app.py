@@ -95,6 +95,7 @@ def get_download_files() -> list[str]:
         f"design_images/{p}设计效果图.png",
         f"design_images/{p}细节图.png",
         f"design_images/{p}场景使用效果图.png",
+        f"design_images/{p}爆炸图.png",
         f"design_images/{p}产品设计展板.png",
         "design_images/设计图像生成提示词.txt",
         "design_images/设计图像清单.xlsx",
@@ -395,6 +396,7 @@ with tabs[7]:
         render_image(f"design_images/{p}场景使用效果图.png", "场景使用效果图")
     with col_b:
         render_image(f"design_images/{p}细节图.png", "产品细节图")
+        render_image(f"design_images/{p}爆炸图.png", "产品爆炸图")
     render_image(f"design_images/{p}产品设计展板.png", "产品设计展板")
 
     prompt_path = resolve_output_path("design_images/设计图像生成提示词.txt")
