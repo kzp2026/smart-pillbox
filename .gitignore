@@ -11,6 +11,7 @@ Thumbs.db
 
 # Virtual environment
 .venv/
+.test_deps/
 
 # Tools & binaries
 tools/
@@ -37,6 +38,8 @@ output/*_pdf*/
 output/*/cache/
 output/*/user/
 output/__pycache__/
+output/runs/
+output/_test_*.csv
 
 # Legacy experiment code
 代码/

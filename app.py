@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 import sys
 import os
+import hashlib
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -14,9 +16,9 @@ import streamlit as st
 # =========================
 
 ROOT_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = ROOT_DIR / "output"
+OUTPUT_ROOT = ROOT_DIR / "output" / "runs"
 SCRIPTS_DIR = ROOT_DIR / "scripts"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 # 阶段定义（去掉产品名称，改为动态）
 STAGES = [
@@ -33,7 +35,26 @@ STAGES = [
 
 def get_product_name() -> str:
     """获取当前产品名称"""
-    return st.session_state.get("product_name", "产品")
+    return str(st.session_state.get("product_name", "")).strip()
+
+
+def safe_path_part(value: str) -> str:
+    """把产品名称转换为安全的目录名，同时保留可读性。"""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value)).strip(" ._")
+    return cleaned[:40] or "未命名产品"
+
+
+def get_output_dir() -> Path:
+    """返回当前上传数据对应的独立输出目录。"""
+    active = st.session_state.get("active_output_dir")
+    if active:
+        return Path(active)
+    return OUTPUT_ROOT / "_waiting_for_upload"
+
+
+def has_active_dataset() -> bool:
+    """判断当前会话是否已经上传并绑定评论数据。"""
+    return bool(st.session_state.get("active_dataset_key"))
 
 
 def output_filename(stage_output: str) -> str:
@@ -47,7 +68,7 @@ def resolve_output_path(relative_path: str) -> Path:
     当 Excel/WPS 占用标准结果文件时，脚本会写入“文件名_时间戳.xlsx”；
     页面展示时自动选择最新文件，避免旧文件占用导致流程中断。
     """
-    resolved = OUTPUT_DIR / output_filename(relative_path)
+    resolved = get_output_dir() / output_filename(relative_path)
     candidates = []
     if resolved.exists():
         candidates.append(resolved)
@@ -86,10 +107,28 @@ def get_download_files() -> list[str]:
 
 def save_uploaded_file(uploaded_file) -> Path | None:
     if uploaded_file is None:
+        st.session_state.pop("active_dataset_key", None)
+        st.session_state.pop("active_output_dir", None)
+        st.session_state.pop("active_input_path", None)
         return None
+
+    file_bytes = uploaded_file.getvalue()
+    digest = hashlib.sha256(file_bytes).hexdigest()
+    dataset_key = f"{safe_path_part(get_product_name())}_{digest[:16]}"
+    run_dir = OUTPUT_ROOT / dataset_key
+    run_dir.mkdir(parents=True, exist_ok=True)
+
     suffix = Path(uploaded_file.name).suffix.lower()
-    target = OUTPUT_DIR / f"uploaded_comments{suffix}"
-    target.write_bytes(uploaded_file.getbuffer())
+    target = run_dir / f"uploaded_comments{suffix}"
+    if not target.exists() or target.read_bytes() != file_bytes:
+        target.write_bytes(file_bytes)
+
+    previous_key = st.session_state.get("active_dataset_key")
+    st.session_state["active_dataset_key"] = dataset_key
+    st.session_state["active_output_dir"] = str(run_dir)
+    st.session_state["active_input_path"] = str(target)
+    if previous_key != dataset_key:
+        st.cache_data.clear()
     return target
 
 
@@ -97,7 +136,7 @@ def run_stage(script_name: str, input_path: Path | None = None) -> subprocess.Co
     command = [
         sys.executable,
         str(SCRIPTS_DIR / script_name),
-        "--output-dir", str(OUTPUT_DIR),
+        "--output-dir", str(get_output_dir()),
     ]
     if script_name in {
         "05_build_mapping_database.py",
@@ -115,7 +154,7 @@ def run_stage(script_name: str, input_path: Path | None = None) -> subprocess.Co
 
 
 @st.cache_data(show_spinner=False)
-def read_excel_cached(path: str, sheet_name: str | None = None):
+def read_excel_cached(path: str, sheet_name: str | None, modified_ns: int, file_size: int):
     if sheet_name is None:
         # sheet_name=None 在 pandas 中表示读取全部工作表，会返回 dict；
         # 页面预览需要 DataFrame，因此默认读取第一个工作表。
@@ -124,7 +163,7 @@ def read_excel_cached(path: str, sheet_name: str | None = None):
 
 
 @st.cache_data(show_spinner=False)
-def read_csv_cached(path: str) -> pd.DataFrame:
+def read_csv_cached(path: str, modified_ns: int, file_size: int) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
@@ -133,7 +172,8 @@ def load_sheet(filename: str, sheet_name: str | None) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     try:
-        data = read_excel_cached(str(path), sheet_name)
+        stat = path.stat()
+        data = read_excel_cached(str(path), sheet_name, stat.st_mtime_ns, stat.st_size)
         # 兜底处理：如果后续误传 sheet_name=None 或文件读取返回字典，
         # 自动取第一个工作表，避免 show_table 访问 .empty 时崩溃。
         if isinstance(data, dict):
@@ -146,7 +186,7 @@ def load_sheet(filename: str, sheet_name: str | None) -> pd.DataFrame:
 
 
 def file_ready(relative_path: str) -> bool:
-    return resolve_output_path(relative_path).exists()
+    return has_active_dataset() and resolve_output_path(relative_path).exists()
 
 
 def show_table(df: pd.DataFrame, title: str, max_rows: int = 100) -> None:
@@ -187,7 +227,7 @@ def render_image(rel_path: str, caption: str) -> None:
 # 3. 页面 UI
 # =========================
 
-st.set_page_config(page_title="用户评论驱动的产品设计系统", page_icon="📊", layout="wide")
+st.set_page_config(page_title="用户评论驱动的产品创新智能体", page_icon="📊", layout="wide")
 
 # --- 侧边栏 ---
 with st.sidebar:
@@ -214,12 +254,20 @@ with st.sidebar:
         type=["xlsx", "xls", "csv"],
         help="支持 .xlsx / .xls / .csv，自动识别评论列。",
     )
+    input_path = save_uploaded_file(uploaded)
+    if uploaded is not None:
+        st.success(f"已绑定当前数据：{uploaded.name}")
+        st.caption(f"独立结果编号：{st.session_state['active_dataset_key'][-16:]}")
+    else:
+        st.info("请上传评论数据。上传前不会显示仓库内的历史结果。")
 
     st.divider()
 
     # 一键生成
     if st.button("🚀 一键生成全部研究结果", type="primary", use_container_width=True):
-        input_path = save_uploaded_file(uploaded)
+        if input_path is None:
+            st.error("请先上传评论数据。")
+            st.stop()
         with st.status(f"正在分析 {get_product_name()} 用户评论...", expanded=True) as status:
             for stage_name, script_name, _ in STAGES:
                 st.write(f"⏳ {stage_name}...")
@@ -231,28 +279,35 @@ with st.sidebar:
                 st.write(f"✅ {stage_name} 完成")
             else:
                 status.update(label="🎉 全部完成！", state="complete")
+        st.cache_data.clear()
         st.rerun()
 
     st.divider()
 
     # 分阶段运行
     st.subheader("🔧 分阶段运行")
-    input_path = save_uploaded_file(uploaded)
     for stage_name, script_name, _ in STAGES:
         if st.button(f"▶ {stage_name}", use_container_width=True):
+            if input_path is None:
+                st.error("请先上传评论数据。")
+                st.stop()
             with st.spinner(f"运行 {stage_name}..."):
                 result = run_stage(script_name, input_path)
                 if result.returncode == 0:
                     st.success(f"✅ {stage_name} 完成")
                 else:
                     st.error(f"❌ {stage_name}：{result.stderr[:300]}")
+            st.cache_data.clear()
             st.rerun()
 
 
 # --- 主区域 ---
 p = get_product_name()
-st.title(f"📊 {p} — 用户评论驱动的产品设计系统")
+st.title(f"📊 {p} — 用户评论驱动的产品创新智能体")
 st.caption("上传任意产品评论数据 → 自动完成 NLP 分析 → 生成产品设计方案与设计图")
+
+if not has_active_dataset():
+    st.info("请在左侧填写产品名称并上传评论数据。当前页面不会读取或展示任何历史产品结果。")
 
 # 标签页
 tabs = st.tabs([
@@ -299,13 +354,15 @@ with tabs[5]:
     st.header("Neo4j 知识图谱数据")
     nodes_path = resolve_output_path("neo4j_nodes.csv")
     rels_path = resolve_output_path("neo4j_relationships.csv")
-    cypher_path = OUTPUT_DIR / "import_neo4j.cypher"
+    cypher_path = get_output_dir() / "import_neo4j.cypher"
     if nodes_path.exists():
-        show_table(read_csv_cached(str(nodes_path)), "知识图谱节点表", 100)
+        stat = nodes_path.stat()
+        show_table(read_csv_cached(str(nodes_path), stat.st_mtime_ns, stat.st_size), "知识图谱节点表", 100)
     else:
         st.info("节点表尚未生成。")
     if rels_path.exists():
-        show_table(read_csv_cached(str(rels_path)), "知识图谱关系表", 100)
+        stat = rels_path.stat()
+        show_table(read_csv_cached(str(rels_path), stat.st_mtime_ns, stat.st_size), "知识图谱关系表", 100)
     else:
         st.info("关系表尚未生成。")
     if cypher_path.exists():
