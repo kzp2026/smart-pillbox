@@ -29,11 +29,15 @@ STAGES = [
     ("04 主题聚类", "04_bertopic_clustering.py", "BERTopic主题聚类结果.xlsx"),
     ("05 需求映射", "05_build_mapping_database.py", "{product}_需求功能映射数据库.xlsx"),
     ("06 Neo4j图谱", "06_build_neo4j_files.py", "neo4j_nodes.csv"),
-    ("07 设计方案", "07_generate_design_scheme.py", "{product}产品设计方案.docx"),
-    ("08 设计图片", "08_generate_design_visuals.py", "design_images/{product}产品设计展板.png"),
+    ("07 AI生成参数", "07_generate_ai_parameters.py", "AI生成参数表.xlsx"),
+    ("08 设计方案", "07_generate_design_scheme.py", "{product}产品设计方案.docx"),
+    ("09 设计图片", "08_generate_design_visuals.py", "design_images/{product}产品设计展板.png"),
+    ("10 方案评价", "09_evaluate_design_scheme.py", "方案评价表.xlsx"),
 ]
 
-DESIGN_IMAGE_STAGES = [STAGES[index] for index in (0, 1, 2, 3, 4, 6, 7)]
+AI_PARAMETER_STAGES = [STAGES[index] for index in (0, 1, 2, 3, 4, 5, 6)]
+DESIGN_IMAGE_STAGES = [STAGES[index] for index in (0, 1, 2, 3, 4, 6, 7, 8)]
+EVALUATION_STAGES = [STAGES[index] for index in (0, 1, 2, 3, 4, 5, 6, 7, 9)]
 
 
 def get_product_name() -> str:
@@ -93,6 +97,10 @@ def get_download_files() -> list[str]:
         "neo4j_nodes.csv",
         "neo4j_relationships.csv",
         "import_neo4j.cypher",
+        "需求—功能—结构映射表.xlsx",
+        "AI生成参数表.xlsx",
+        "ai_generation_parameters.json",
+        "prompt_template.txt",
         f"{p}产品设计方案.docx",
         f"{p}产品设计方案.txt",
         f"design_images/{p}产品效果图.png",
@@ -103,6 +111,8 @@ def get_download_files() -> list[str]:
         f"design_images/{p}产品使用效果图.png",
         "design_images/设计图像生成提示词.txt",
         "design_images/设计图像清单.xlsx",
+        "方案评价表.xlsx",
+        "开题报告实验结果摘要.docx",
     ]
 
 
@@ -146,8 +156,10 @@ def run_stage(script_name: str, input_path: Path | None = None) -> subprocess.Co
     if script_name in {
         "05_build_mapping_database.py",
         "06_build_neo4j_files.py",
+        "07_generate_ai_parameters.py",
         "07_generate_design_scheme.py",
         "08_generate_design_visuals.py",
+        "09_evaluate_design_scheme.py",
     }:
         command.extend(["--product-name", get_product_name()])
     if input_path and script_name in {
@@ -235,7 +247,7 @@ def render_design_image_card(rel_path: str, title: str, description: str) -> Non
             use_container_width=True,
         )
     else:
-        st.info(f"{title}尚未生成，请先运行“08 设计图片”。")
+        st.info(f"{title}尚未生成，请先运行“09 设计图片”。")
 
 
 def load_render_status() -> dict:
@@ -246,6 +258,50 @@ def load_render_status() -> dict:
         return json.loads(status_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+
+
+def load_json_output(relative_path: str) -> dict:
+    path = resolve_output_path(relative_path)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def load_text_output(relative_path: str) -> str:
+    path = resolve_output_path(relative_path)
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def run_stage_sequence(
+    stages: list[tuple[str, str, str]],
+    input_path: Path | None,
+    final_stage_name: str,
+    running_label: str,
+    done_label: str,
+) -> bool:
+    with st.status(running_label, expanded=True) as status:
+        for stage_name, script_name, stage_output in stages:
+            if stage_name != final_stage_name and file_ready(stage_output):
+                st.write(f"✅ {stage_name} 已有结果，跳过")
+                continue
+            st.write(f"⏳ {stage_name}...")
+            result = run_stage(script_name, input_path)
+            if result.returncode != 0:
+                error_text = (result.stderr or result.stdout or "未知错误").strip()
+                st.error(f"❌ {stage_name} 失败：{error_text[:800]}")
+                status.update(label=f"{stage_name} 失败", state="error")
+                return False
+            st.write(f"✅ {stage_name} 完成")
+        status.update(label=done_label, state="complete")
+        return True
 
 
 # =========================
@@ -339,7 +395,8 @@ if not has_active_dataset():
 # 标签页
 tabs = st.tabs([
     "📋 评论清洗", "🔑 关键词提取", "💬 情感分析", "🧩 主题聚类",
-    "🗺 需求映射", "🕸 Neo4j图谱", "📝 设计方案", "🎨 设计图片", "📥 下载中心",
+    "🗺 需求映射", "🕸 Neo4j图谱", "🤖 AI 生成参数", "📝 设计方案",
+    "🎨 设计图片", "📊 方案评价", "📥 下载中心",
 ])
 
 with tabs[0]:
@@ -397,6 +454,62 @@ with tabs[5]:
         st.code(cypher_path.read_text(encoding="utf-8"), language="cypher")
 
 with tabs[6]:
+    st.header("AI 生成参数")
+    st.caption("用户评论数据 → 需求提取 → 知识图谱关系路径 → AI 生成参数 → Prompt 模板 → 设计方案生成 → 方案评价与优化。")
+
+    if st.button(
+        "🤖 生成/刷新 AI 生成参数",
+        type="primary",
+        use_container_width=True,
+        disabled=input_path is None,
+        help="自动补跑缺失的分析阶段，并生成映射表、JSON 参数和 Prompt 模板。",
+    ):
+        if run_stage_sequence(
+            AI_PARAMETER_STAGES,
+            input_path,
+            "07 AI生成参数",
+            "正在把需求信息转化为 AI 可识别参数...",
+            "AI 生成参数已生成",
+        ):
+            st.cache_data.clear()
+
+    st.subheader("需求—功能—结构—AI 生成参数映射表")
+    st.caption("把用户需求主题、痛点证据和 Neo4j 关系路径进一步转化为功能、结构、材料、场景和 AI Prompt 参数。")
+    ai_mapping_df = load_sheet("需求—功能—结构映射表.xlsx", None)
+    if ai_mapping_df.empty:
+        st.info("AI 生成参数尚未生成，请点击上方按钮或运行“07 AI生成参数”。")
+    else:
+        st.dataframe(ai_mapping_df, use_container_width=True)
+
+    ai_table_df = load_sheet("AI生成参数表.xlsx", None)
+    if not ai_table_df.empty and "原始评论证据" in ai_table_df.columns:
+        with st.expander("查看原始评论证据", expanded=False):
+            for _, row in ai_table_df.iterrows():
+                need = str(row.get("need", row.get("core_needs", row.get("需求主题", "需求主题"))))
+                evidence = str(row.get("原始评论证据", "")).strip()
+                with st.container(border=True):
+                    st.markdown(f"**{need}**")
+                    if evidence and evidence.lower() != "nan":
+                        for comment in [item.strip() for item in evidence.split("|") if item.strip()]:
+                            st.write(f"“{comment}”")
+                    else:
+                        st.caption("暂无代表性原始评论，请先完成主题聚类与情感分析。")
+
+    st.subheader("JSON 参数预览")
+    parameter_json = load_json_output("ai_generation_parameters.json")
+    if parameter_json:
+        st.json(parameter_json, expanded=False)
+    else:
+        st.info("JSON 参数尚未生成。")
+
+    st.subheader("Prompt 模板预览")
+    prompt_template = load_text_output("prompt_template.txt")
+    if prompt_template:
+        st.code(prompt_template, language="text")
+    else:
+        st.info("Prompt 模板尚未生成。")
+
+with tabs[7]:
     st.header(f"{p} 产品设计方案")
     if deepseek_configured:
         st.success("DeepSeek 已连接：设计方案将根据当前评论分析结果进行增强。")
@@ -408,7 +521,7 @@ with tabs[6]:
     else:
         st.info("设计方案尚未生成。")
 
-with tabs[7]:
+with tabs[8]:
     st.header("设计图片")
     st.caption("完整输出产品效果图、爆炸图、细节图、三视图、设计展板和产品使用效果图。")
     if deepseek_configured:
@@ -435,25 +548,15 @@ with tabs[7]:
         type="primary",
         use_container_width=True,
         disabled=input_path is None,
-        help="自动补跑缺失的分析阶段，并重新执行 08 设计图片。",
+        help="自动补跑缺失的分析阶段，并重新执行 09 设计图片。",
     ):
-        generation_failed = False
-        with st.status("正在准备设计数据并生成六类图片...", expanded=True) as status:
-            for stage_name, script_name, stage_output in DESIGN_IMAGE_STAGES:
-                if stage_name != "08 设计图片" and file_ready(stage_output):
-                    st.write(f"✅ {stage_name} 已有结果，跳过")
-                    continue
-                st.write(f"⏳ {stage_name}...")
-                result = run_stage(script_name, input_path)
-                if result.returncode != 0:
-                    error_text = (result.stderr or result.stdout or "未知错误").strip()
-                    st.error(f"❌ {stage_name} 失败：{error_text[:800]}")
-                    status.update(label=f"{stage_name} 失败", state="error")
-                    generation_failed = True
-                    break
-                st.write(f"✅ {stage_name} 完成")
-            if not generation_failed:
-                status.update(label="六类设计图片已生成", state="complete")
+        run_stage_sequence(
+            DESIGN_IMAGE_STAGES,
+            input_path,
+            "09 设计图片",
+            "正在准备设计数据并生成六类图片...",
+            "六类设计图片已生成",
+        )
         st.cache_data.clear()
 
     render_status = load_render_status()
@@ -490,5 +593,36 @@ with tabs[7]:
         with st.expander("查看可复制到图像模型的提示词"):
             st.code(prompt_path.read_text(encoding="utf-8"))
 
-with tabs[8]:
+with tabs[9]:
+    st.header("方案评价")
+    st.caption("说明 AI 生成方案如何进一步转化为可评价、可优化、可工程化的产品设计方案。")
+    st.info("评价链路：用户评论数据 → 需求提取 → 知识图谱关系路径 → AI 生成参数 → Prompt 模板 → 设计方案生成 → 方案评价与优化。")
+
+    if st.button(
+        "📊 生成/刷新方案评价",
+        type="primary",
+        use_container_width=True,
+        disabled=input_path is None,
+        help="自动补跑缺失的分析阶段，并生成方案评价表和开题报告实验结果摘要。",
+    ):
+        if run_stage_sequence(
+            EVALUATION_STAGES,
+            input_path,
+            "10 方案评价",
+            "正在生成方案评价与开题报告摘要...",
+            "方案评价已生成",
+        ):
+            st.cache_data.clear()
+
+    evaluation_df = load_sheet("方案评价表.xlsx", None)
+    if evaluation_df.empty:
+        st.info("方案评价尚未生成，请点击上方按钮或运行“10 方案评价”。")
+    else:
+        average_score = round(float(evaluation_df["分值"].mean()), 1) if "分值" in evaluation_df.columns else None
+        if average_score is not None:
+            st.metric("方案综合平均分", f"{average_score} / 100")
+        show_table(evaluation_df, "方案评价表", 20)
+        st.caption("评价结果可反向指导 AI 生成参数更新，形成“生成—评价—优化”的闭环。")
+
+with tabs[10]:
     show_downloads()
