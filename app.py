@@ -4,9 +4,7 @@ import subprocess
 import sys
 import os
 import hashlib
-import html
 import json
-import math
 import re
 from pathlib import Path
 
@@ -14,6 +12,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+from scripts.graph_visualization import build_graph_html
 from scripts.result_archive import build_result_archive, extract_result_archive, find_restored_input_file
 
 
@@ -115,6 +114,7 @@ def get_download_files() -> list[str]:
         f"design_images/{p}产品设计展板.png",
         f"design_images/{p}产品使用效果图.png",
         "design_images/设计图像生成提示词.txt",
+        "design_images/产品一致性设计锁.txt",
         "design_images/设计图像清单.xlsx",
         "方案评价表.xlsx",
         "方案评价结果.json",
@@ -300,72 +300,6 @@ def get_image_api_status() -> tuple[bool, str, str]:
     if provider in {"dashscope", "aliyun", "alibaba", "qwen", "qwen-image", "wanx"} or (dashscope_key and provider not in {"openai", "compatible", "openai-compatible"}):
         return bool(dashscope_key), "阿里云百炼 DashScope（通义万相 / Qwen-Image）", os.getenv("IMAGE_MODEL", "qwen-image")
     return bool(image_key), "OpenAI Images 兼容接口", os.getenv("IMAGE_MODEL", "gpt-image-1")
-
-
-def build_graph_svg(nodes_df: pd.DataFrame, rels_df: pd.DataFrame, max_nodes: int = 36) -> str:
-    if nodes_df.empty or rels_df.empty or "node_id" not in nodes_df.columns:
-        return ""
-    selected = nodes_df.head(max_nodes).copy()
-    selected_ids = set(selected["node_id"].astype(str))
-    rels = rels_df[
-        rels_df.get("source_id", pd.Series(dtype=str)).astype(str).isin(selected_ids)
-        & rels_df.get("target_id", pd.Series(dtype=str)).astype(str).isin(selected_ids)
-    ].head(max_nodes * 2)
-    width, height = 980, 620
-    center_x, center_y, radius = width / 2, height / 2, 250
-    positions = {}
-    total = max(len(selected), 1)
-    for index, (_, row) in enumerate(selected.iterrows()):
-        angle = 2 * math.pi * index / total
-        node_id = str(row.get("node_id", ""))
-        positions[node_id] = (center_x + radius * math.cos(angle), center_y + radius * math.sin(angle))
-
-    color_map = {
-        "Product": "#4D8DFF",
-        "Requirement": "#64C78A",
-        "Function": "#F4A261",
-        "Structure": "#59C3C3",
-        "Topic": "#A78BFA",
-        "Keyword": "#E76F51",
-    }
-    edge_parts = []
-    for _, rel in rels.iterrows():
-        source_id = str(rel.get("source_id", ""))
-        target_id = str(rel.get("target_id", ""))
-        if source_id in positions and target_id in positions:
-            x1, y1 = positions[source_id]
-            x2, y2 = positions[target_id]
-            title = html.escape(str(rel.get("type", "")))
-            edge_parts.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#CBD5E1" stroke-width="1.4"><title>{title}</title></line>')
-
-    node_parts = []
-    for _, row in selected.iterrows():
-        node_id = str(row.get("node_id", ""))
-        x, y = positions[node_id]
-        label = str(row.get("label", ""))
-        name = str(row.get("name", node_id))
-        color = color_map.get(label, "#94A3B8")
-        safe_name = html.escape(name[:14])
-        safe_title = html.escape(f"{name} | {label} | {row.get('description', '')}")
-        node_parts.append(
-            f'<g><circle cx="{x:.1f}" cy="{y:.1f}" r="22" fill="{color}" stroke="white" stroke-width="3"><title>{safe_title}</title></circle>'
-            f'<text x="{x:.1f}" y="{y + 38:.1f}" text-anchor="middle" font-size="12" fill="#102033">{safe_name}</text></g>'
-        )
-
-    legend = "".join(
-        f'<span style="display:inline-flex;align-items:center;margin-right:14px;"><span style="width:10px;height:10px;background:{color};border-radius:50%;display:inline-block;margin-right:5px;"></span>{html.escape(label)}</span>'
-        for label, color in color_map.items()
-    )
-    return f"""
-    <div style="font-family:Arial,'Microsoft YaHei',sans-serif;background:#F8FAFC;border:1px solid #D8E2EC;border-radius:16px;padding:14px;">
-      <div style="font-weight:700;color:#102033;margin-bottom:8px;">知识图谱关系预览（悬停节点/连线可查看说明）</div>
-      <div style="font-size:12px;color:#5C6B7A;margin-bottom:10px;">{legend}</div>
-      <svg width="100%" viewBox="0 0 {width} {height}" role="img" aria-label="Neo4j 知识图谱关系预览">
-        {''.join(edge_parts)}
-        {''.join(node_parts)}
-      </svg>
-    </div>
-    """
 
 
 def load_json_output(relative_path: str) -> dict:
@@ -602,9 +536,9 @@ with tabs[5]:
         rels_df = read_csv_cached(str(rels_path), stat.st_mtime_ns, stat.st_size)
     else:
         st.info("关系表尚未生成。")
-    graph_svg = build_graph_svg(nodes_df, rels_df)
-    if graph_svg:
-        components.html(graph_svg, height=660, scrolling=True)
+    graph_html = build_graph_html(nodes_df, rels_df)
+    if graph_html:
+        components.html(graph_html, height=680, scrolling=True)
     if not nodes_df.empty:
         show_table(nodes_df, "知识图谱节点表", 100)
     if not rels_df.empty:
@@ -767,6 +701,10 @@ with tabs[8]:
     if prompt_path.exists():
         with st.expander("查看可复制到图像模型的提示词"):
             st.code(prompt_path.read_text(encoding="utf-8"))
+    consistency_lock_path = resolve_output_path("design_images/产品一致性设计锁.txt")
+    if consistency_lock_path.exists():
+        with st.expander("查看产品一致性设计锁"):
+            st.code(consistency_lock_path.read_text(encoding="utf-8"), language="text")
 
 with tabs[9]:
     st.header("方案评价")

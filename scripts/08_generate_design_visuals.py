@@ -453,6 +453,70 @@ def structure_prompt_context(struct_df: pd.DataFrame) -> str:
     return "、".join(components) or "根据产品功能合理拆分关键结构组件"
 
 
+def collect_prompt_terms(df: pd.DataFrame, columns: list[str], limit: int = 8) -> list[str]:
+    terms: list[str] = []
+    if df.empty:
+        return terms
+    for column in columns:
+        if column not in df.columns:
+            continue
+        for value in df[column].dropna().astype(str).tolist():
+            for item in value.replace("，", "、").replace(",", "、").replace("|", "、").split("、"):
+                clean = item.strip()
+                if clean and clean.lower() != "nan" and clean not in terms:
+                    terms.append(clean)
+                if len(terms) >= limit:
+                    return terms
+    return terms
+
+
+def product_specific_constraints(product_name: str) -> str:
+    """为容易跑偏的产品类型补充负向约束，减少模型把同名部件生成成其他物品。"""
+    name = product_name.strip()
+    if "马桶" in name and "扶手" in name:
+        return (
+            "必须是安装在马桶侧边或墙面的如厕安全扶手系统；统一外观为白色 U 型双横杆扶手、"
+            "灰色防滑握持垫、银色金属墙面固定座和可见螺丝。不得生成水龙头、花洒、毛巾架、门把手、"
+            "床边护栏、普通栏杆或单根黑色管件。"
+        )
+    if "药盒" in name:
+        return "必须是同一款分格药盒或智能药盒，不得生成耳机盒、收纳盒、化妆盒或厨房容器。"
+    return f"必须始终表现同一款{name}，不得生成其他品类、替代产品或与{name}无关的对象。"
+
+
+def build_product_consistency_lock(product_name: str, req_df: pd.DataFrame, struct_df: pd.DataFrame) -> str:
+    """生成所有写实图共用的产品身份锁，保证同一产品只改变视角和场景。"""
+    need_terms = collect_prompt_terms(req_df, ["需求主题", "需求描述", "来源关键词"], limit=8)
+    structure_terms = collect_prompt_terms(struct_df, ["结构名称", "结构描述"], limit=10)
+    need_text = "、".join(need_terms) if need_terms else "安全、易用、稳定、符合目标用户痛点"
+    structure_text = "、".join(structure_terms) if structure_terms else structure_prompt_context(struct_df)
+    specific_constraints = product_specific_constraints(product_name)
+
+    return f"""【统一产品设计锁定】
+所有六张图片必须表现同一款“{product_name}”，只能改变镜头视角、拆解方式、展板排版和使用场景，不得改变产品本体。
+固定产品身份：{product_name}。
+固定需求特征：{need_text}。
+固定结构特征：{structure_text}。
+固定视觉规则：同一轮廓、同一主色、同一材料质感、同一关键部件数量、同一安装方式、同一尺寸比例、同一操作区域；产品效果图、爆炸图、细节图、三视图、设计展板和使用效果图必须互相对应。
+负向约束：{specific_constraints}
+Consistency lock: same exact product design, same silhouette, same component count, same colors, same materials, same mounting method, same proportions across all images; only camera angle, exploded separation, close-up crop, presentation board layout and usage scene may change."""
+
+
+def attach_consistency_lock_to_prompts(prompt_lines: list[str], consistency_lock: str) -> list[str]:
+    """把同一份产品身份锁注入每条实际发送给图像模型的 prompt。"""
+    lock = "\n".join(line.strip() for line in consistency_lock.splitlines() if line.strip())
+    locked_prompts = []
+    for prompt in prompt_lines:
+        clean_prompt = prompt.strip()
+        if not clean_prompt:
+            continue
+        if lock in clean_prompt:
+            locked_prompts.append(clean_prompt)
+        else:
+            locked_prompts.append(f"{lock}\n\n镜头任务：{clean_prompt}")
+    return locked_prompts
+
+
 def build_image_prompts(product_name: str, req_df: pd.DataFrame, struct_df: pd.DataFrame) -> str:
     """构建 AI 图像生成提示词"""
     top_keywords = ""
@@ -464,26 +528,30 @@ def build_image_prompts(product_name: str, req_df: pd.DataFrame, struct_df: pd.D
         top_keywords = "、".join(all_kws[:3]) if all_kws else ""
 
     structure_context = structure_prompt_context(struct_df)
+    consistency_lock = build_product_consistency_lock(product_name, req_df, struct_df)
 
     return f"""# {product_name} 产品设计图像生成提示词
 
+## 统一产品一致性设计锁
+{consistency_lock}
+
 ## 1. 产品效果图
-Prompt: 专业的{product_name}产品设计渲染图，展示产品整体外观和核心功能模块，干净的白色背景，柔和的工作室灯光，高品质工业设计摄影风格，无品牌logo，无水印
+Prompt: 严格遵守“统一产品设计锁定”，专业的{product_name}产品设计渲染图，展示同一款产品的整体外观、固定结构、材质、配色和核心功能模块，干净的白色背景，柔和的工作室灯光，高品质工业设计摄影风格，photorealistic，industrial design visualization，no logo，no watermark
 
 ## 2. 产品爆炸图
-Prompt: {product_name}产品结构爆炸图，严格依据以下部件进行拆分：{structure_context}。所有零部件沿垂直装配轴依次分离悬浮，保持正确装配顺序、统一透视、等距间隔且互不遮挡，清晰展示外壳、承力结构、连接方式和功能组件之间的装配关系；右侧设置简洁部件名称与水平引导线，白色背景，等距轴测视角，照片级工业设计产品渲染，engineering exploded view，photorealistic，industrial design visualization，no logo，no watermark
+Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品结构爆炸图，必须拆解同一款产品而不是重新设计新产品，严格依据以下部件进行拆分：{structure_context}。所有零部件沿垂直装配轴依次分离悬浮，保持正确装配顺序、统一透视、等距间隔且互不遮挡，清晰展示外壳、承力结构、连接方式和功能组件之间的装配关系；右侧设置简洁部件名称与水平引导线，白色背景，等距轴测视角，照片级工业设计产品渲染，engineering exploded view，photorealistic，industrial design visualization，no logo，no watermark
 
 ## 3. 产品细节图
-Prompt: {product_name}产品细节特写渲染图，展示关键功能组件、连接方式、操作界面、人体工学细节和材质工艺，微距摄影品质，干净背景，photorealistic，industrial design visualization，no logo，no watermark
+Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品细节特写渲染图，只放大同一款产品上的关键功能组件、连接方式、操作界面、人体工学细节和材质工艺，不能替换为不同造型或不同产品，微距摄影品质，干净背景，photorealistic，industrial design visualization，no logo，no watermark
 
 ## 4. 产品三视图
-Prompt: {product_name}工业设计三视图，同一产品以统一比例展示正视图、侧视图和俯视图，三个正交视图水平排列并严格对齐，准确呈现轮廓、结构分区、操作区域与主要尺寸关系，白色背景，无透视变形，orthographic projection，photorealistic，industrial design visualization，no logo，no watermark
+Prompt: 严格遵守“统一产品设计锁定”，{product_name}工业设计三视图，同一产品以统一比例展示正视图、侧视图和俯视图，三个正交视图水平排列并严格对齐，准确呈现同一轮廓、同一结构分区、同一操作区域与主要尺寸关系，白色背景，无透视变形，orthographic projection，photorealistic，industrial design visualization，no logo，no watermark
 
 ## 5. 设计展板
-Prompt: {product_name}产品设计研究生课题展板，包含产品效果图、爆炸图、细节图、三视图、产品使用效果图、需求分析和功能结构映射，学术展示风格，信息层级清晰，photorealistic，industrial design visualization，no logo，no watermark
+Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品设计研究生课题展板，展板中的效果图、爆炸图、细节图、三视图和使用效果图必须是同一款产品，包含需求分析和功能结构映射，学术展示风格，信息层级清晰，photorealistic，industrial design visualization，no logo，no watermark
 
 ## 6. 产品使用效果图
-Prompt: 真实目标用户在自然生活场景中使用{product_name}的照片级渲染图，准确展示人物动作、产品尺度、空间关系和核心功能，温馨自然光线，现代真实环境，photorealistic，industrial design visualization，no logo，no watermark
+Prompt: 严格遵守“统一产品设计锁定”，真实目标用户在自然生活场景中使用同一款{product_name}的照片级渲染图，产品本体必须与产品效果图、爆炸图、细节图和三视图保持一致，准确展示人物动作、产品尺度、空间关系和核心功能，温馨自然光线，现代真实环境，photorealistic，industrial design visualization，no logo，no watermark
 
 ---
 关键词参考：{top_keywords}
@@ -523,22 +591,26 @@ def maybe_enhance_image_prompts(
     requirements = req_df.head(8).to_dict(orient="records") if not req_df.empty else []
     topics = topic_df.head(6).to_dict(orient="records") if not topic_df.empty else []
     structures = struct_df.head(12).to_dict(orient="records") if not struct_df.empty else []
+    consistency_lock = build_product_consistency_lock(product_name, req_df, struct_df)
     prompt = f"""你是工业设计师和产品可视化提示词专家。请基于以下真实分析数据，为{product_name}生成六类写实产品渲染提示词。
 
 用户需求：{requirements}
 评论主题：{topics}
 产品结构：{structures}
+统一产品设计锁定：{consistency_lock}
 
 要求：
 1. 不得把产品误写成智能药盒或其他产品。
-2. 产品效果图要说明造型、材质、颜色、核心结构、视角、灯光和背景。
-3. 爆炸图必须严格使用“产品结构”中的真实部件，沿装配轴分层拆开并保持正确装配关系。
-4. 产品细节图要展示关键连接、操作界面、材料工艺和人体工学细节。
-5. 产品三视图必须包含统一比例且严格对齐的正视图、侧视图和俯视图，不得使用透视视角。
-6. 设计展板要整合效果图、爆炸图、细节图、三视图、使用效果图和需求要点，避免难以辨认的大段文字。
-7. 产品使用效果图要描述真实目标用户、动作、空间关系和使用环境。
-8. 每条提示词都必须强调 photorealistic、industrial design visualization、no logo、no watermark。
-9. 严格按下列 Markdown 格式输出，只能包含六个章节，每个章节恰好一行以 Prompt: 开头的完整提示词：
+2. 六条提示词必须表现同一款产品：同一轮廓、同一颜色、同一材料、同一部件数量、同一安装方式和同一尺寸比例；只能改变视角、拆解、特写、展板排版和使用场景。
+3. 每条 Prompt 都必须明确写入“严格遵守统一产品设计锁定”。
+4. 产品效果图要说明造型、材质、颜色、核心结构、视角、灯光和背景。
+5. 爆炸图必须严格使用“产品结构”中的真实部件，沿装配轴分层拆开并保持正确装配关系。
+6. 产品细节图要展示关键连接、操作界面、材料工艺和人体工学细节。
+7. 产品三视图必须包含统一比例且严格对齐的正视图、侧视图和俯视图，不得使用透视视角。
+8. 设计展板要整合效果图、爆炸图、细节图、三视图、使用效果图和需求要点，避免难以辨认的大段文字。
+9. 产品使用效果图要描述真实目标用户、动作、空间关系和使用环境。
+10. 每条提示词都必须强调 photorealistic、industrial design visualization、no logo、no watermark。
+11. 严格按下列 Markdown 格式输出，只能包含六个章节，每个章节恰好一行以 Prompt: 开头的完整提示词：
 
 ## 1. 产品效果图
 Prompt: ...
@@ -625,12 +697,15 @@ def main() -> None:
     }
 
     # 生成图像提示词
+    consistency_lock = build_product_consistency_lock(product_name, req_df, struct_df)
     base_prompts = build_image_prompts(product_name, req_df, struct_df)
     prompts_text, prompt_method = maybe_enhance_image_prompts(
         base_prompts, product_name, req_df, topic_df, struct_df
     )
     prompt_path = image_dir / "设计图像生成提示词.txt"
     prompt_path.write_text(prompts_text, encoding="utf-8")
+    consistency_lock_path = image_dir / "产品一致性设计锁.txt"
+    consistency_lock_path.write_text(consistency_lock, encoding="utf-8")
     print(f"渲染提示词生成方式：{prompt_method}")
 
     # 尝试 AI 渲染
@@ -644,7 +719,9 @@ def main() -> None:
     if use_ai:
         print(f"尝试 AI 真实渲染，供应商：{image_provider}，图像模型：{image_model}")
         # 准备各图片的专用 prompt
-        prompt_lines = extract_prompt_lines(prompts_text)
+        prompt_lines = attach_consistency_lock_to_prompts(
+            extract_prompt_lines(prompts_text), consistency_lock
+        )
         ai_results["render"] = generate_ai_image(
             prompt_lines[0],
             images["render"], "1024x1024"
@@ -673,20 +750,20 @@ def main() -> None:
         print("未配置 IMAGE_API_KEY、OPENAI_API_KEY、DASHSCOPE_API_KEY 或 QWEN_IMAGE_API_KEY，设计图片将生成离线示意图；如需写实渲染，请在 Streamlit Cloud Secrets 中配置图像生成密钥。")
 
     # 回退到 PIL 示意图
-    if not images["render"].exists():
+    if not ai_results["render"]:
         print("生成 PIL 示意图...")
         create_render_image(images["render"], req_df, product_name)
 
-    if not images["detail"].exists():
+    if not ai_results["detail"]:
         create_simple_placeholder(images["detail"], f"{product_name} 细节图")
 
-    if not images["exploded"].exists():
+    if not ai_results["exploded"]:
         create_simple_placeholder(images["exploded"], f"{product_name} 产品爆炸图")
 
-    if not images["three_view"].exists():
+    if not ai_results["three_view"]:
         create_three_view_placeholder(images["three_view"], product_name)
 
-    if not images["usage"].exists():
+    if not ai_results["usage"]:
         create_simple_placeholder(images["usage"], f"{product_name} 产品使用效果图")
 
     create_board(images["board"], images, req_df, topic_df, product_name)
@@ -700,6 +777,7 @@ def main() -> None:
         "custom_base_url": bool(image_config.get("custom_base_url")),
         "ai_success_count": ai_success_count,
         "ai_target_count": len(ai_results),
+        "consistency_lock_file": str(consistency_lock_path.name),
         "images": ai_results,
     }
     status_path = image_dir / "写实渲染状态.json"
@@ -716,6 +794,7 @@ def main() -> None:
         {"图像类型": "产品设计展板", "文件路径": str(images["board"]), "用途": "用于论文答辩、课程展示或设计汇报"},
         {"图像类型": "产品使用效果图", "文件路径": str(images["usage"]), "用途": f"展示{product_name}真实使用场景"},
         {"图像类型": "图像生成提示词", "文件路径": str(prompt_path), "用途": "可复制到图像生成模型进一步渲染"},
+        {"图像类型": "产品一致性设计锁", "文件路径": str(consistency_lock_path), "用途": "约束六类写实渲染图保持同一款产品"},
         {"图像类型": "写实渲染状态", "文件路径": str(status_path), "用途": "记录图片模型、成功数量和回退状态"},
     ])
     manifest_path = image_dir / "设计图像清单.xlsx"
@@ -728,6 +807,7 @@ def main() -> None:
         if img_path.exists():
             print(f"已生成：{img_path}")
     print(f"已生成：{prompt_path}")
+    print(f"已生成：{consistency_lock_path}")
     print(f"已生成：{manifest_path}")
 
 
