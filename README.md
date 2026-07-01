@@ -32,7 +32,7 @@ streamlit run app.py
 | 07 AI生成参数 | 需求、功能、结构转 AI 可识别参数 | `AI生成参数表.xlsx`、`ai_generation_parameters.json` |
 | 08 设计方案 | 产品设计文字方案 | `{产品名}产品设计方案.docx` |
 | 09 设计图片 | 产品效果图+爆炸图+细节图+三视图+设计展板+产品使用效果图 | `design_images/` |
-| 10 方案评价 | 方案评分、优化建议、开题报告摘要 | `方案评价表.xlsx`、`开题报告实验结果摘要.docx` |
+| 10 方案评价 | 方案评分、优化建议、开题报告摘要 | `方案评价表.xlsx`、`方案优化建议.txt`、`开题报告实验结果摘要.docx` |
 
 核心技术路线为：**用户评论数据 → 需求提取 → 知识图谱关系路径 → AI 生成参数 → Prompt 模板 → 设计方案生成 → 方案评价与优化**。
 
@@ -42,6 +42,8 @@ streamlit run app.py
 - `ai_generation_parameters.json`
 - `prompt_template.txt`
 - `方案评价表.xlsx`
+- `方案优化建议.txt`
+- `优化后AI生成参数.json`
 - `开题报告实验结果摘要.docx`
 
 ## 4. AI 增强（可选）
@@ -56,9 +58,18 @@ set DEEPSEEK_MODEL=deepseek-v4-flash
 配置后：
 - 第 8 阶段会自动用 DeepSeek 润色设计方案
 - 第 9 阶段会用 DeepSeek 根据需求、痛点和主题聚类优化六类渲染提示词
-- DeepSeek 本身不提供图片生成端点；写实产品渲染图仍需另外配置 `IMAGE_API_KEY`
+- DeepSeek 本身不提供图片生成端点；写实产品渲染图仍需另外配置图片生成模型密钥。
 
-写实渲染建议配置：
+国内写实渲染推荐配置（阿里云百炼 DashScope，支持通义万相 / Qwen-Image）：
+```toml
+DASHSCOPE_API_KEY = "你的阿里云百炼API Key"
+IMAGE_PROVIDER = "dashscope"
+IMAGE_MODEL = "qwen-image"
+# 也可改用通义万相模型，例如：
+# IMAGE_MODEL = "wan2.2-t2i-plus"
+```
+
+OpenAI 或其他兼容接口配置：
 ```toml
 IMAGE_API_KEY = "你的图片模型密钥"
 IMAGE_MODEL = "gpt-image-1"
@@ -68,6 +79,8 @@ IMAGE_QUALITY = "medium"
 ```
 
 保存 Streamlit Secrets 并等待应用重启后，在“设计图片”页点击“生成/重新生成六类写实渲染图”。系统会自动补跑缺失的前置阶段，并显示写实图成功数量；失败项目会保留离线示意图。
+
+下载中心支持“一键下载完整研究结果归档.zip”。如果 Streamlit Cloud 重启导致临时结果丢失，可在侧边栏“恢复历史结果归档”中重新导入该 ZIP。
 
 Streamlit Cloud 请在“管理应用 → 应用设置 → 秘密”中使用根级配置：
 ```toml

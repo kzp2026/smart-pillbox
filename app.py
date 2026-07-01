@@ -4,12 +4,17 @@ import subprocess
 import sys
 import os
 import hashlib
+import html
 import json
+import math
 import re
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
+
+from scripts.result_archive import build_result_archive, extract_result_archive, find_restored_input_file
 
 
 # =========================
@@ -112,6 +117,9 @@ def get_download_files() -> list[str]:
         "design_images/设计图像生成提示词.txt",
         "design_images/设计图像清单.xlsx",
         "方案评价表.xlsx",
+        "方案评价结果.json",
+        "方案优化建议.txt",
+        "优化后AI生成参数.json",
         "开题报告实验结果摘要.docx",
     ]
 
@@ -122,6 +130,11 @@ def get_download_files() -> list[str]:
 
 def save_uploaded_file(uploaded_file) -> Path | None:
     if uploaded_file is None:
+        existing_input = st.session_state.get("active_input_path")
+        if existing_input and Path(existing_input).exists():
+            return Path(existing_input)
+        if st.session_state.get("active_dataset_key") and st.session_state.get("active_output_dir"):
+            return None
         st.session_state.pop("active_dataset_key", None)
         st.session_state.pop("active_output_dir", None)
         st.session_state.pop("active_input_path", None)
@@ -217,6 +230,17 @@ def show_table(df: pd.DataFrame, title: str, max_rows: int = 100) -> None:
 def show_downloads() -> None:
     st.header("📥 下载中心")
     found = False
+    output_dir = get_output_dir()
+    if has_active_dataset() and output_dir.exists():
+        archive_bytes = build_result_archive(output_dir, get_product_name())
+        st.download_button(
+            label="⬇ 下载完整研究结果归档.zip",
+            data=archive_bytes,
+            file_name=f"{safe_path_part(get_product_name())}_完整研究结果归档.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
+        st.caption("该 ZIP 可在侧边栏“恢复历史结果归档”重新导入，解决 Streamlit Cloud 重启后结果丢失的问题。")
     for rel_path in get_download_files():
         full = resolve_output_path(rel_path)
         if full.exists():
@@ -258,6 +282,81 @@ def load_render_status() -> dict:
         return json.loads(status_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+
+
+def get_image_api_status() -> tuple[bool, str, str]:
+    dashscope_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_IMAGE_API_KEY")
+    image_key = os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
+    provider = os.getenv("IMAGE_PROVIDER", "").strip().lower()
+    if provider in {"dashscope", "aliyun", "alibaba", "qwen", "qwen-image", "wanx"} or (dashscope_key and provider not in {"openai", "compatible", "openai-compatible"}):
+        return bool(dashscope_key), "阿里云百炼 DashScope（通义万相 / Qwen-Image）", os.getenv("IMAGE_MODEL", "qwen-image")
+    return bool(image_key), "OpenAI Images 兼容接口", os.getenv("IMAGE_MODEL", "gpt-image-1")
+
+
+def build_graph_svg(nodes_df: pd.DataFrame, rels_df: pd.DataFrame, max_nodes: int = 36) -> str:
+    if nodes_df.empty or rels_df.empty or "node_id" not in nodes_df.columns:
+        return ""
+    selected = nodes_df.head(max_nodes).copy()
+    selected_ids = set(selected["node_id"].astype(str))
+    rels = rels_df[
+        rels_df.get("source_id", pd.Series(dtype=str)).astype(str).isin(selected_ids)
+        & rels_df.get("target_id", pd.Series(dtype=str)).astype(str).isin(selected_ids)
+    ].head(max_nodes * 2)
+    width, height = 980, 620
+    center_x, center_y, radius = width / 2, height / 2, 250
+    positions = {}
+    total = max(len(selected), 1)
+    for index, (_, row) in enumerate(selected.iterrows()):
+        angle = 2 * math.pi * index / total
+        node_id = str(row.get("node_id", ""))
+        positions[node_id] = (center_x + radius * math.cos(angle), center_y + radius * math.sin(angle))
+
+    color_map = {
+        "Product": "#4D8DFF",
+        "Requirement": "#64C78A",
+        "Function": "#F4A261",
+        "Structure": "#59C3C3",
+        "Topic": "#A78BFA",
+        "Keyword": "#E76F51",
+    }
+    edge_parts = []
+    for _, rel in rels.iterrows():
+        source_id = str(rel.get("source_id", ""))
+        target_id = str(rel.get("target_id", ""))
+        if source_id in positions and target_id in positions:
+            x1, y1 = positions[source_id]
+            x2, y2 = positions[target_id]
+            title = html.escape(str(rel.get("type", "")))
+            edge_parts.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#CBD5E1" stroke-width="1.4"><title>{title}</title></line>')
+
+    node_parts = []
+    for _, row in selected.iterrows():
+        node_id = str(row.get("node_id", ""))
+        x, y = positions[node_id]
+        label = str(row.get("label", ""))
+        name = str(row.get("name", node_id))
+        color = color_map.get(label, "#94A3B8")
+        safe_name = html.escape(name[:14])
+        safe_title = html.escape(f"{name} | {label} | {row.get('description', '')}")
+        node_parts.append(
+            f'<g><circle cx="{x:.1f}" cy="{y:.1f}" r="22" fill="{color}" stroke="white" stroke-width="3"><title>{safe_title}</title></circle>'
+            f'<text x="{x:.1f}" y="{y + 38:.1f}" text-anchor="middle" font-size="12" fill="#102033">{safe_name}</text></g>'
+        )
+
+    legend = "".join(
+        f'<span style="display:inline-flex;align-items:center;margin-right:14px;"><span style="width:10px;height:10px;background:{color};border-radius:50%;display:inline-block;margin-right:5px;"></span>{html.escape(label)}</span>'
+        for label, color in color_map.items()
+    )
+    return f"""
+    <div style="font-family:Arial,'Microsoft YaHei',sans-serif;background:#F8FAFC;border:1px solid #D8E2EC;border-radius:16px;padding:14px;">
+      <div style="font-weight:700;color:#102033;margin-bottom:8px;">知识图谱关系预览（悬停节点/连线可查看说明）</div>
+      <div style="font-size:12px;color:#5C6B7A;margin-bottom:10px;">{legend}</div>
+      <svg width="100%" viewBox="0 0 {width} {height}" role="img" aria-label="Neo4j 知识图谱关系预览">
+        {''.join(edge_parts)}
+        {''.join(node_parts)}
+      </svg>
+    </div>
+    """
 
 
 def load_json_output(relative_path: str) -> dict:
@@ -342,6 +441,30 @@ with st.sidebar:
     else:
         st.info("请上传评论数据。上传前不会显示仓库内的历史结果。")
 
+    with st.expander("📦 恢复历史结果归档", expanded=False):
+        archive_file = st.file_uploader(
+            "上传此前下载的完整研究结果归档.zip",
+            type=["zip"],
+            key="restore_result_archive",
+            help="用于恢复已生成的表格、图片、方案和评价结果，解决云端重启后结果丢失。",
+        )
+        if st.button("恢复归档", use_container_width=True, disabled=archive_file is None):
+            try:
+                archive_bytes = archive_file.getvalue()
+                restored_dir = extract_result_archive(archive_bytes, OUTPUT_ROOT, get_product_name())
+                restored_input = find_restored_input_file(restored_dir)
+                st.session_state["active_dataset_key"] = restored_dir.name
+                st.session_state["active_output_dir"] = str(restored_dir)
+                if restored_input:
+                    st.session_state["active_input_path"] = str(restored_input)
+                else:
+                    st.session_state.pop("active_input_path", None)
+                st.cache_data.clear()
+                st.success("历史结果已恢复。")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"归档恢复失败：{exc}")
+
     st.divider()
 
     # 一键生成
@@ -385,7 +508,7 @@ with st.sidebar:
 # --- 主区域 ---
 p = get_product_name()
 deepseek_configured = bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("LLM_API_KEY"))
-image_api_configured = bool(os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY"))
+image_api_configured, image_provider_label, image_model_name = get_image_api_status()
 st.title(f"📊 {p} — 用户评论驱动的产品创新智能体")
 st.caption("上传任意产品评论数据 → 自动完成 NLP 分析 → 生成产品设计方案与设计图")
 
@@ -439,16 +562,25 @@ with tabs[5]:
     nodes_path = resolve_output_path("neo4j_nodes.csv")
     rels_path = resolve_output_path("neo4j_relationships.csv")
     cypher_path = get_output_dir() / "import_neo4j.cypher"
+    nodes_df = pd.DataFrame()
+    rels_df = pd.DataFrame()
     if nodes_path.exists():
         stat = nodes_path.stat()
-        show_table(read_csv_cached(str(nodes_path), stat.st_mtime_ns, stat.st_size), "知识图谱节点表", 100)
+        nodes_df = read_csv_cached(str(nodes_path), stat.st_mtime_ns, stat.st_size)
     else:
         st.info("节点表尚未生成。")
     if rels_path.exists():
         stat = rels_path.stat()
-        show_table(read_csv_cached(str(rels_path), stat.st_mtime_ns, stat.st_size), "知识图谱关系表", 100)
+        rels_df = read_csv_cached(str(rels_path), stat.st_mtime_ns, stat.st_size)
     else:
         st.info("关系表尚未生成。")
+    graph_svg = build_graph_svg(nodes_df, rels_df)
+    if graph_svg:
+        components.html(graph_svg, height=660, scrolling=True)
+    if not nodes_df.empty:
+        show_table(nodes_df, "知识图谱节点表", 100)
+    if not rels_df.empty:
+        show_table(rels_df, "知识图谱关系表", 100)
     if cypher_path.exists():
         st.subheader("Cypher 导入脚本")
         st.code(cypher_path.read_text(encoding="utf-8"), language="cypher")
@@ -530,8 +662,18 @@ with tabs[8]:
     with st.expander("如何启用写实渲染", expanded=not image_api_configured):
         st.markdown(
             "在 Streamlit Cloud 打开 **Manage app → Settings → Secrets**，添加支持图片生成的 API 配置。"
-            "DeepSeek 只负责优化提示词，不能替代图片生成模型。"
+            "DeepSeek 只负责优化提示词，不能替代图片生成模型；国内模型可直接使用阿里云百炼 DashScope。"
         )
+        st.caption("推荐国内配置：通义万相 / Qwen-Image")
+        st.code(
+            'DASHSCOPE_API_KEY = "你的阿里云百炼API Key"\n'
+            'IMAGE_PROVIDER = "dashscope"\n'
+            'IMAGE_MODEL = "qwen-image"\n'
+            '# 也可改用通义万相模型，例如：\n'
+            '# IMAGE_MODEL = "wan2.2-t2i-plus"',
+            language="toml",
+        )
+        st.caption("OpenAI 或其他兼容接口配置：")
         st.code(
             'IMAGE_API_KEY = "你的图片模型密钥"\n'
             'IMAGE_MODEL = "gpt-image-1"\n'
@@ -542,7 +684,10 @@ with tabs[8]:
         )
         st.caption("保存 Secrets 后等待应用重启，再点击下方按钮重新生成。密钥不要上传到 GitHub。")
 
-    generate_label = "🎨 生成/重新生成六类写实渲染图" if image_api_configured else "🧩 生成六类离线示意图"
+    if image_api_configured:
+        st.success(f"图片模型已配置：{image_provider_label} / {image_model_name}")
+
+    generate_label = f"🎨 使用{image_provider_label}生成/重新生成六类写实渲染图" if image_api_configured else "🧩 生成六类离线示意图"
     if st.button(
         generate_label,
         type="primary",
@@ -563,15 +708,16 @@ with tabs[8]:
     if image_api_configured:
         success_count = int(render_status.get("ai_success_count", 0))
         target_count = int(render_status.get("ai_target_count", 5))
-        model_name = render_status.get("model") or os.getenv("IMAGE_MODEL", "已配置模型")
+        provider_name = render_status.get("provider") or image_provider_label
+        model_name = render_status.get("model") or image_model_name
         if render_status and success_count == target_count:
-            st.success(f"图片模型已连接：{model_name}，本次 {success_count}/{target_count} 张写实图生成成功，展板已自动合成。")
+            st.success(f"图片模型已连接：{provider_name} / {model_name}，本次 {success_count}/{target_count} 张写实图生成成功，展板已自动合成。")
         elif render_status:
             st.warning(f"图片模型已配置，但本次仅 {success_count}/{target_count} 张写实图生成成功；失败项目已自动回退为离线示意图。")
         else:
             st.info("图片模型密钥已配置。点击上方按钮生成六类写实渲染图。")
     else:
-        st.warning("当前未配置图片生成密钥，只能生成专业提示词和离线示意图；写实渲染需要 IMAGE_API_KEY。")
+        st.warning("当前未配置图片生成密钥，只能生成专业提示词和离线示意图；写实渲染需要 IMAGE_API_KEY、OPENAI_API_KEY、DASHSCOPE_API_KEY 或 QWEN_IMAGE_API_KEY。")
 
     image_cards = [
         (f"design_images/{p}产品效果图.png", "产品效果图", "展示整体造型、材质、配色与核心功能。"),
@@ -623,6 +769,14 @@ with tabs[9]:
             st.metric("方案综合平均分", f"{average_score} / 100")
         show_table(evaluation_df, "方案评价表", 20)
         st.caption("评价结果可反向指导 AI 生成参数更新，形成“生成—评价—优化”的闭环。")
+        optimization_prompt = load_text_output("方案优化建议.txt")
+        optimized_parameters = load_json_output("优化后AI生成参数.json")
+        if optimization_prompt:
+            with st.expander("查看方案优化建议 Prompt"):
+                st.code(optimization_prompt, language="text")
+        if optimized_parameters:
+            with st.expander("查看优化后 AI 生成参数"):
+                st.json(optimized_parameters, expanded=False)
 
 with tabs[10]:
     show_downloads()

@@ -6,6 +6,9 @@ import json
 import os
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pandas as pd
@@ -266,21 +269,45 @@ def create_three_view_placeholder(path: Path, product_name: str) -> None:
 
 
 # =========================
-# 4. AI 真实渲染（DALL-E 兼容接口）
+# 4. AI 真实渲染（OpenAI 兼容接口 / 阿里云百炼 DashScope）
 # =========================
 
-def get_image_api_config() -> tuple[str | None, str | None, str, str]:
+def get_image_api_config() -> dict:
     """读取图像生成接口配置。
 
-    Streamlit Cloud 中建议配置 IMAGE_API_KEY 或 OPENAI_API_KEY。
+    Streamlit Cloud 中可配置 IMAGE_API_KEY/OPENAI_API_KEY，或配置国内模型
+    DASHSCOPE_API_KEY/QWEN_IMAGE_API_KEY 接入通义万相 / Qwen-Image。
     不建议复用 DeepSeek 等纯文本 LLM 的 LLM_API_KEY，否则图片接口会失败并降级为示意图。
     """
+    provider = os.getenv("IMAGE_PROVIDER", "").strip().lower()
+    dashscope_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_IMAGE_API_KEY")
+    use_dashscope = provider in {"dashscope", "aliyun", "alibaba", "qwen", "qwen-image", "wanx"} or (dashscope_key and provider not in {"openai", "compatible", "openai-compatible"})
+    if use_dashscope:
+        model = os.getenv("IMAGE_MODEL", "qwen-image")
+        return {
+            "provider": "dashscope",
+            "api_key": dashscope_key,
+            "base_url": os.getenv("DASHSCOPE_IMAGE_API_URL", "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"),
+            "task_url": os.getenv("DASHSCOPE_TASK_API_URL", "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"),
+            "model": model,
+            "quality": os.getenv("IMAGE_QUALITY", "standard"),
+            "custom_base_url": bool(os.getenv("DASHSCOPE_IMAGE_API_URL")),
+        }
+
     api_key = os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("IMAGE_BASE_URL") or None
     model = os.getenv("IMAGE_MODEL", "gpt-image-1")
     default_quality = "medium" if model.startswith("gpt-image") else "standard"
     quality = os.getenv("IMAGE_QUALITY", default_quality)
-    return api_key, base_url, model, quality
+    return {
+        "provider": "openai",
+        "api_key": api_key,
+        "base_url": base_url,
+        "task_url": "",
+        "model": model,
+        "quality": quality,
+        "custom_base_url": bool(base_url),
+    }
 
 
 def compatible_image_size(model: str, size: str) -> str:
@@ -292,9 +319,80 @@ def compatible_image_size(model: str, size: str) -> str:
     }.get(size, size)
 
 
-def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -> bool:
+def dashscope_image_size(size: str) -> str:
+    return size.replace("x", "*")
+
+
+def dashscope_request_json(url: str, api_key: str, payload: dict | None = None, async_request: bool = False, timeout: int = 60) -> dict:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if async_request:
+        headers["X-DashScope-Async"] = "enable"
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def download_image_url(image_url: str, output_path: Path) -> bool:
+    urllib.request.urlretrieve(image_url, str(output_path))
+    return output_path.exists() and output_path.stat().st_size > 0
+
+
+def generate_dashscope_image(prompt: str, output_path: Path, size: str, config: dict) -> bool:
+    api_key = config.get("api_key")
+    if not api_key:
+        return False
+
+    try:
+        response = dashscope_request_json(
+            config["base_url"],
+            api_key,
+            {
+                "model": config["model"],
+                "input": {"prompt": prompt},
+                "parameters": {
+                    "size": dashscope_image_size(size),
+                    "n": 1,
+                },
+            },
+            async_request=True,
+        )
+        task_id = response.get("output", {}).get("task_id")
+        if not task_id:
+            raise ValueError(f"DashScope 未返回 task_id：{response}")
+
+        task_url = str(config["task_url"]).format(task_id=task_id)
+        deadline = time.time() + int(os.getenv("DASHSCOPE_TIMEOUT_SECONDS", "300"))
+        poll_interval = float(os.getenv("DASHSCOPE_POLL_INTERVAL", "3"))
+        last_payload = {}
+        while time.time() < deadline:
+            last_payload = dashscope_request_json(task_url, api_key, None, async_request=False, timeout=60)
+            output = last_payload.get("output", {})
+            status = output.get("task_status") or output.get("status")
+            if status == "SUCCEEDED":
+                results = output.get("results") or []
+                image_url = results[0].get("url") if results else ""
+                if not image_url:
+                    raise ValueError(f"DashScope 任务成功但未返回图片 URL：{last_payload}")
+                if download_image_url(image_url, output_path):
+                    print(f"DashScope写实渲染完成：{output_path}")
+                    return True
+                return False
+            if status in {"FAILED", "CANCELED", "UNKNOWN"}:
+                raise ValueError(f"DashScope 任务失败：{last_payload}")
+            time.sleep(poll_interval)
+        raise TimeoutError(f"DashScope 任务超时：{last_payload}")
+    except (urllib.error.URLError, TimeoutError, ValueError, KeyError, IndexError) as e:
+        print(f"DashScope图片生成失败，已回退为离线示意图：{e}")
+        return False
+
+
+def generate_openai_image(prompt: str, output_path: Path, size: str, config: dict) -> bool:
     """使用 OpenAI Images 兼容接口生成真实感渲染图。"""
-    api_key, base_url, model, quality = get_image_api_config()
+    api_key = config.get("api_key")
     if not api_key:
         return False
 
@@ -304,13 +402,14 @@ def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -
         return False
 
     try:
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        model = config["model"]
+        client = OpenAI(api_key=api_key, base_url=config.get("base_url") or None)
 
         response = client.images.generate(
             model=model,
             prompt=prompt,
             size=compatible_image_size(model, size),
-            quality=quality,
+            quality=config["quality"],
             n=1,
         )
         image_data = response.data[0]
@@ -330,6 +429,14 @@ def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -
         print(f"图片模型生成失败，已回退为离线示意图：{e}")
 
     return False
+
+
+def generate_ai_image(prompt: str, output_path: Path, size: str = "1024x1024") -> bool:
+    """按配置选择 OpenAI 兼容接口或阿里云百炼 DashScope 生成真实感渲染图。"""
+    config = get_image_api_config()
+    if config["provider"] == "dashscope":
+        return generate_dashscope_image(prompt, output_path, size, config)
+    return generate_openai_image(prompt, output_path, size, config)
 
 
 def structure_prompt_context(struct_df: pd.DataFrame) -> str:
@@ -489,7 +596,11 @@ def main() -> None:
     args = parser.parse_args()
 
     product_name = args.product_name
-    image_api_key, image_base_url, image_model, image_quality = get_image_api_config()
+    image_config = get_image_api_config()
+    image_api_key = image_config.get("api_key")
+    image_model = image_config.get("model")
+    image_quality = image_config.get("quality")
+    image_provider = image_config.get("provider")
     use_ai = args.ai_render or bool(image_api_key)
 
     output_dir = ensure_output_dir(args.output_dir)
@@ -531,7 +642,7 @@ def main() -> None:
         "usage": False,
     }
     if use_ai:
-        print(f"尝试 AI 真实渲染，图像模型：{image_model}")
+        print(f"尝试 AI 真实渲染，供应商：{image_provider}，图像模型：{image_model}")
         # 准备各图片的专用 prompt
         prompt_lines = extract_prompt_lines(prompts_text)
         ai_results["render"] = generate_ai_image(
@@ -559,7 +670,7 @@ def main() -> None:
             images["usage"], "1024x1024"
         ) if len(prompt_lines) > 5 else False
     else:
-        print("未配置 IMAGE_API_KEY 或 OPENAI_API_KEY，设计图片将生成离线示意图；如需写实渲染，请在 Streamlit Cloud Secrets 中配置图像生成密钥。")
+        print("未配置 IMAGE_API_KEY、OPENAI_API_KEY、DASHSCOPE_API_KEY 或 QWEN_IMAGE_API_KEY，设计图片将生成离线示意图；如需写实渲染，请在 Streamlit Cloud Secrets 中配置图像生成密钥。")
 
     # 回退到 PIL 示意图
     if not images["render"].exists():
@@ -583,9 +694,10 @@ def main() -> None:
     ai_success_count = sum(ai_results.values())
     render_status = {
         "image_api_configured": bool(image_api_key),
+        "provider": image_provider if image_api_key else None,
         "model": image_model if image_api_key else None,
         "quality": image_quality if image_api_key else None,
-        "custom_base_url": bool(image_base_url),
+        "custom_base_url": bool(image_config.get("custom_base_url")),
         "ai_success_count": ai_success_count,
         "ai_target_count": len(ai_results),
         "images": ai_results,

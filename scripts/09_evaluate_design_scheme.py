@@ -163,6 +163,52 @@ def save_summary_docx(product_name: str, evaluation_df: pd.DataFrame, output_pat
     doc.save(output_path)
 
 
+def build_optimization_prompt(product_name: str, evaluation_df: pd.DataFrame, ai_df: pd.DataFrame) -> str:
+    weak_items = evaluation_df.sort_values("分值", ascending=True).head(4).to_dict(orient="records") if not evaluation_df.empty else []
+    needs = ai_df["need"].dropna().astype(str).head(8).tolist() if not ai_df.empty and "need" in ai_df.columns else []
+    suggestions = [str(item.get("优化建议", "")) for item in weak_items if str(item.get("优化建议", "")).strip()]
+    return f"""# {product_name}方案优化建议
+
+本文件用于形成“生成—评价—优化”闭环：先由用户评论数据生成 AI 参数和设计方案，再根据评价表低分项反向更新 Prompt 与设计参数。
+
+## 重点需求
+{chr(10).join(f"- {need}" for need in needs) if needs else "- 暂无需求参数"}
+
+## 优先优化指标
+{chr(10).join(f"- {item.get('评价指标')}：{item.get('分值')}分；{item.get('优化建议')}" for item in weak_items) if weak_items else "- 暂无评价结果"}
+
+## 可复制优化 Prompt
+请基于当前{product_name}设计方案和 AI 生成参数，优先解决以下问题：
+{chr(10).join(f"{index + 1}. {suggestion}" for index, suggestion in enumerate(suggestions)) if suggestions else "1. 保持需求证据链，继续优化功能、结构、材料和场景参数。"}
+
+输出要求：
+1. 保留用户评论证据与需求来源。
+2. 明确更新功能参数、结构参数、材料参数和场景参数。
+3. 对低分评价指标逐项给出优化方案。
+4. 继续体现：用户评论数据 → 需求提取 → 知识图谱关系路径 → AI 生成参数 → Prompt 模板 → 设计方案生成 → 方案评价与优化。
+"""
+
+
+def build_optimized_parameters(product_name: str, evaluation_df: pd.DataFrame, ai_df: pd.DataFrame) -> dict:
+    weak_items = evaluation_df.sort_values("分值", ascending=True).head(4).to_dict(orient="records") if not evaluation_df.empty else []
+    optimization_focus = [str(item.get("评价指标", "")) for item in weak_items if str(item.get("评价指标", "")).strip()]
+    updated_rows = []
+    for _, row in ai_df.iterrows():
+        item = row.to_dict()
+        constraints = "；".join(str(entry.get("优化建议", "")) for entry in weak_items if str(entry.get("优化建议", "")).strip())
+        if constraints:
+            item["optimization_constraints"] = constraints
+            item["text_prompt_parameter"] = f"{item.get('text_prompt_parameter', '')} 优化约束：{constraints}"
+            item["image_prompt_parameter"] = f"{item.get('image_prompt_parameter', '')} 视觉优化重点：{constraints}"
+        updated_rows.append(item)
+    return {
+        "product_type": product_name,
+        "optimization_focus": optimization_focus,
+        "updated_generation_parameters": updated_rows,
+        "logic_chain": "用户评论数据 → 需求提取 → 知识图谱关系路径 → AI 生成参数 → Prompt 模板 → 设计方案生成 → 方案评价与优化",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="第九阶段：生成方案评价表与开题报告摘要")
     parser.add_argument("--output-dir", default="output", help="输出目录")
@@ -178,6 +224,11 @@ def main() -> None:
     evaluation_df = build_evaluation_table(product_name, ai_df, scheme_text)
     save_workbook(output_dir / "方案评价表.xlsx", {"方案评价": evaluation_df})
     save_summary_docx(product_name, evaluation_df, output_dir / "开题报告实验结果摘要.docx")
+    (output_dir / "方案优化建议.txt").write_text(build_optimization_prompt(product_name, evaluation_df, ai_df), encoding="utf-8")
+    (output_dir / "优化后AI生成参数.json").write_text(
+        json.dumps(build_optimized_parameters(product_name, evaluation_df, ai_df), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     (output_dir / "方案评价结果.json").write_text(
         json.dumps(
             {
@@ -195,6 +246,8 @@ def main() -> None:
     print(f"评价指标数量：{len(evaluation_df)}")
     print(f"已生成：{output_dir / '方案评价表.xlsx'}")
     print(f"已生成：{output_dir / '开题报告实验结果摘要.docx'}")
+    print(f"已生成：{output_dir / '方案优化建议.txt'}")
+    print(f"已生成：{output_dir / '优化后AI生成参数.json'}")
 
 
 if __name__ == "__main__":
