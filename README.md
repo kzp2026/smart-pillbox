@@ -64,8 +64,9 @@ set DEEPSEEK_MODEL=deepseek-v4-flash
 ```toml
 DASHSCOPE_API_KEY = "你的阿里云百炼API Key"
 IMAGE_PROVIDER = "dashscope"
-IMAGE_MODEL = "qwen-image"
-# 也可改用通义万相模型，例如：
+IMAGE_MODEL = "qwen-image-2.0-pro"
+# 如控制台暂未开通参考图模型，可临时改用：
+# IMAGE_MODEL = "qwen-image"
 # IMAGE_MODEL = "wan2.2-t2i-plus"
 ```
 
@@ -78,7 +79,7 @@ IMAGE_QUALITY = "medium"
 # IMAGE_BASE_URL = "https://你的接口地址/v1"
 ```
 
-保存 Streamlit Secrets 并等待应用重启后，在“设计图片”页点击“生成/重新生成六类写实渲染图”。系统会自动补跑缺失的前置阶段，并显示写实图成功数量；失败项目会保留离线示意图。六类写实图会共用一份“产品一致性设计锁”，用于约束产品效果图、爆炸图、细节图、三视图、设计展板和使用效果图保持同一款产品，只改变视角、拆解、特写、展板排版和使用场景。
+保存 Streamlit Secrets 并等待应用重启后，在“设计图片”页点击“生成/重新生成六类写实渲染图”。系统会自动补跑缺失的前置阶段，并显示写实图成功数量；失败项目会保留离线示意图。六类写实图会共用一份“产品一致性设计锁”，并优先使用产品效果图作为后续图片的参考图，用于约束爆炸图、细节图、三视图、设计展板和使用效果图保持同一款产品，只改变视角、拆解、特写、展板排版和使用场景。
 
 下载中心支持“一键下载完整研究结果归档.zip”。如果 Streamlit Cloud 重启导致临时结果丢失，可在侧边栏“恢复历史结果归档”中重新导入该 ZIP。
 

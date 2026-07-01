@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
+from PIL import Image
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -21,6 +25,20 @@ def load_design_visuals_module():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+class FakeResponse:
+    def __init__(self, payload: dict):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
 
 
 class DesignVisualConsistencyTests(unittest.TestCase):
@@ -53,6 +71,129 @@ class DesignVisualConsistencyTests(unittest.TestCase):
             self.assertIn("统一产品设计锁定", prompt)
             self.assertIn("same exact product design", prompt)
             self.assertIn("马桶扶手", prompt)
+
+    def test_smart_pillbox_lock_blocks_earbud_case_drift(self) -> None:
+        module = load_design_visuals_module()
+        req_df = pd.DataFrame(
+            [{"需求主题": "定时提醒", "需求描述": "老人容易忘记吃药", "来源关键词": "提醒、分格、便携"}]
+        )
+        struct_df = pd.DataFrame(
+            [
+                {"结构名称": "七日分格药仓", "结构描述": "按星期和时段分类收纳药片"},
+                {"结构名称": "前置提醒屏", "结构描述": "显示时间和服药状态"},
+            ]
+        )
+
+        consistency_lock = module.build_product_consistency_lock("智能药盒", req_df, struct_df)
+        prompts_text = module.build_image_prompts("智能药盒", req_df, struct_df)
+
+        self.assertIn("七日分格药仓", consistency_lock)
+        self.assertIn("不得生成耳机盒", consistency_lock)
+        self.assertIn("不得生成充电盒", consistency_lock)
+        self.assertIn("单一产品主体", prompts_text)
+        self.assertIn("不要拼贴图", prompts_text)
+
+    def test_board_notes_are_compact_design_description_not_topic_dump(self) -> None:
+        module = load_design_visuals_module()
+        req_df = pd.DataFrame(
+            [
+                {"需求主题": "安全提醒", "需求描述": "老人需要按时吃药", "来源关键词": "提醒"},
+                {"需求主题": "分区清楚", "需求描述": "药品分类不容易混乱", "来源关键词": "分格"},
+                {"需求主题": "携带方便", "需求描述": "出门也能携带", "来源关键词": "便携"},
+            ]
+        )
+        topic_df = pd.DataFrame(
+            [{"主题名称": "主题0", "主题关键词": "提醒,分格,老人,定时,声音,灯光,便携,安全,防误服"}]
+        )
+
+        notes = module.build_compact_board_notes("智能药盒", req_df, topic_df)
+
+        self.assertLessEqual(len(notes), 4)
+        self.assertTrue(all(len(note) <= 36 for note in notes))
+        self.assertFalse(any("主题0" in note or "主题关键词" in note for note in notes))
+
+    def test_pm_review_records_cover_all_design_images(self) -> None:
+        module = load_design_visuals_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            images = {}
+            for key in ["render", "exploded", "detail", "three_view", "board", "usage"]:
+                image_path = root / f"{key}.png"
+                Image.new("RGB", (16, 16), "white").save(image_path)
+                images[key] = image_path
+            ai_results = {key: True for key in ["render", "exploded", "detail", "three_view", "usage"]}
+            records = module.build_pm_image_review_records(
+                "智能药盒",
+                images,
+                ai_results,
+                reference_enabled=True,
+                consistency_lock="统一产品设计锁定",
+            )
+
+        image_types = {record["图像类型"] for record in records}
+        self.assertEqual(
+            image_types,
+            {"产品一致性", "产品效果图", "产品爆炸图", "产品细节图", "产品三视图", "设计展板", "产品使用效果图"},
+        )
+        self.assertTrue(all(record["PM验收状态"] == "通过" for record in records))
+        self.assertTrue(any("同一产品" in record["PM检查项"] for record in records))
+
+    def test_board_template_uses_portrait_reference_style(self) -> None:
+        module = load_design_visuals_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            images = {}
+            for key in ["render", "exploded", "detail", "three_view", "usage"]:
+                image_path = root / f"{key}.png"
+                Image.new("RGB", (640, 420), "white").save(image_path)
+                images[key] = image_path
+            images["board"] = root / "board.png"
+            req_df = pd.DataFrame([{"需求主题": "安全提醒", "需求描述": "老人需要按时吃药", "来源关键词": "提醒"}])
+            topic_df = pd.DataFrame([{"主题关键词": "提醒,分格,老人,便携"}])
+
+            module.create_board(images["board"], images, req_df, topic_df, "智能药盒")
+            with Image.open(images["board"]) as board:
+                board_size = board.size
+
+        self.assertEqual(board_size, (1600, 2200))
+
+    def test_dashscope_multimodal_reference_request_uses_reference_image(self) -> None:
+        module = load_design_visuals_module()
+        requests = []
+
+        def fake_urlopen(request, timeout=0):
+            requests.append(request)
+            body = json.loads(request.data.decode("utf-8"))
+            content = body["input"]["messages"][0]["content"]
+            self.assertEqual(body["model"], "qwen-image-2.0-pro")
+            self.assertFalse(body["parameters"]["prompt_extend"])
+            self.assertTrue(any("image" in item for item in content))
+            self.assertTrue(any("text" in item and "同一款产品" in item["text"] for item in content))
+            return FakeResponse({"output": {"choices": [{"message": {"content": [{"image": "https://example.com/ref.png"}]}}]}})
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reference_path = root / "reference.png"
+            output_path = root / "output.png"
+            Image.new("RGB", (8, 8), "white").save(reference_path)
+            config = {
+                "provider": "dashscope",
+                "api_key": "test-key",
+                "model": "qwen-image-2.0-pro",
+                "multimodal_url": "https://example.com/multimodal-generation/generation",
+                "prompt_extend": False,
+                "negative_prompt": "collage",
+            }
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                with patch("urllib.request.urlretrieve", side_effect=lambda url, filename: Path(filename).write_bytes(b"PNG")):
+                    ok = module.generate_dashscope_multimodal_image(
+                        "生成同一款产品细节图", output_path, "1024x1024", config, reference_path=reference_path
+                    )
+            output_bytes = output_path.read_bytes()
+
+        self.assertTrue(ok)
+        self.assertEqual(output_bytes, b"PNG")
+        self.assertEqual(len(requests), 1)
 
 
 if __name__ == "__main__":

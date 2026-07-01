@@ -115,6 +115,7 @@ def get_download_files() -> list[str]:
         f"design_images/{p}产品使用效果图.png",
         "design_images/设计图像生成提示词.txt",
         "design_images/产品一致性设计锁.txt",
+        "design_images/设计图片PM验收表.xlsx",
         "design_images/设计图像清单.xlsx",
         "方案评价表.xlsx",
         "方案评价结果.json",
@@ -185,7 +186,7 @@ def run_stage(script_name: str, input_path: Path | None = None) -> subprocess.Co
     if runtime_dashscope_key:
         env["DASHSCOPE_API_KEY"] = runtime_dashscope_key
         env["IMAGE_PROVIDER"] = "dashscope"
-        env["IMAGE_MODEL"] = str(st.session_state.get("runtime_image_model", "qwen-image")).strip() or "qwen-image"
+        env["IMAGE_MODEL"] = str(st.session_state.get("runtime_image_model", "qwen-image-2.0-pro")).strip() or "qwen-image-2.0-pro"
     return subprocess.run(command, cwd=ROOT_DIR, capture_output=True, text=True, env=env)
 
 
@@ -293,12 +294,12 @@ def load_render_status() -> dict:
 def get_image_api_status() -> tuple[bool, str, str]:
     runtime_dashscope_key = str(st.session_state.get("runtime_dashscope_api_key", "")).strip()
     if runtime_dashscope_key:
-        return True, "阿里云百炼 DashScope（当前会话临时密钥）", str(st.session_state.get("runtime_image_model", "qwen-image")).strip() or "qwen-image"
+        return True, "阿里云百炼 DashScope（当前会话临时密钥）", str(st.session_state.get("runtime_image_model", "qwen-image-2.0-pro")).strip() or "qwen-image-2.0-pro"
     dashscope_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_IMAGE_API_KEY")
     image_key = os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
     provider = os.getenv("IMAGE_PROVIDER", "").strip().lower()
     if provider in {"dashscope", "aliyun", "alibaba", "qwen", "qwen-image", "wanx"} or (dashscope_key and provider not in {"openai", "compatible", "openai-compatible"}):
-        return bool(dashscope_key), "阿里云百炼 DashScope（通义万相 / Qwen-Image）", os.getenv("IMAGE_MODEL", "qwen-image")
+        return bool(dashscope_key), "阿里云百炼 DashScope（通义万相 / Qwen-Image）", os.getenv("IMAGE_MODEL", "qwen-image-2.0-pro")
     return bool(image_key), "OpenAI Images 兼容接口", os.getenv("IMAGE_MODEL", "gpt-image-1")
 
 
@@ -395,10 +396,10 @@ with st.sidebar:
         )
         st.selectbox(
             "图片模型",
-            options=["qwen-image", "wan2.2-t2i-plus"],
+            options=["qwen-image-2.0-pro", "qwen-image", "wan2.2-t2i-plus"],
             index=0,
             key="runtime_image_model",
-            help="优先使用 qwen-image；如果你的百炼控制台未开通，可切换通义万相 wan2.2-t2i-plus。",
+            help="优先使用 qwen-image-2.0-pro，它支持参考图链路，更容易保持六张图为同一产品。",
         )
         if st.session_state.get("runtime_dashscope_api_key"):
             st.success("已填写临时百炼密钥。进入“设计图片”页点击写实渲染生成按钮。")
@@ -631,8 +632,9 @@ with tabs[8]:
         st.code(
             'DASHSCOPE_API_KEY = "你的阿里云百炼API Key"\n'
             'IMAGE_PROVIDER = "dashscope"\n'
-            'IMAGE_MODEL = "qwen-image"\n'
-            '# 也可改用通义万相模型，例如：\n'
+            'IMAGE_MODEL = "qwen-image-2.0-pro"\n'
+            '# 如果控制台暂未开通参考图模型，可临时改用：\n'
+            '# IMAGE_MODEL = "qwen-image"\n'
             '# IMAGE_MODEL = "wan2.2-t2i-plus"',
             language="toml",
         )
@@ -705,6 +707,12 @@ with tabs[8]:
     if consistency_lock_path.exists():
         with st.expander("查看产品一致性设计锁"):
             st.code(consistency_lock_path.read_text(encoding="utf-8"), language="text")
+    pm_review_df = load_sheet("design_images/设计图片PM验收表.xlsx", None)
+    if not pm_review_df.empty:
+        with st.expander("查看设计图片 PM 验收表", expanded=True):
+            st.dataframe(pm_review_df, use_container_width=True)
+            if "PM验收状态" in pm_review_df.columns and (pm_review_df["PM验收状态"] != "通过").any():
+                st.warning("存在需复核或需重生成项目，请优先处理 PM 验收表中的优化建议。")
 
 with tabs[9]:
     st.header("方案评价")
