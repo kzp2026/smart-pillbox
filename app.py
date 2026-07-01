@@ -180,7 +180,13 @@ def run_stage(script_name: str, input_path: Path | None = None) -> subprocess.Co
         "03_sentiment_analysis.py", "04_bertopic_clustering.py",
     }:
         command.extend(["--input", str(input_path)])
-    return subprocess.run(command, cwd=ROOT_DIR, capture_output=True, text=True)
+    env = os.environ.copy()
+    runtime_dashscope_key = str(st.session_state.get("runtime_dashscope_api_key", "")).strip()
+    if runtime_dashscope_key:
+        env["DASHSCOPE_API_KEY"] = runtime_dashscope_key
+        env["IMAGE_PROVIDER"] = "dashscope"
+        env["IMAGE_MODEL"] = str(st.session_state.get("runtime_image_model", "qwen-image")).strip() or "qwen-image"
+    return subprocess.run(command, cwd=ROOT_DIR, capture_output=True, text=True, env=env)
 
 
 @st.cache_data(show_spinner=False)
@@ -285,6 +291,9 @@ def load_render_status() -> dict:
 
 
 def get_image_api_status() -> tuple[bool, str, str]:
+    runtime_dashscope_key = str(st.session_state.get("runtime_dashscope_api_key", "")).strip()
+    if runtime_dashscope_key:
+        return True, "阿里云百炼 DashScope（当前会话临时密钥）", str(st.session_state.get("runtime_image_model", "qwen-image")).strip() or "qwen-image"
     dashscope_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_IMAGE_API_KEY")
     image_key = os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
     provider = os.getenv("IMAGE_PROVIDER", "").strip().lower()
@@ -440,6 +449,25 @@ with st.sidebar:
         st.caption(f"独立结果编号：{st.session_state['active_dataset_key'][-16:]}")
     else:
         st.info("请上传评论数据。上传前不会显示仓库内的历史结果。")
+
+    with st.expander("🎨 写实渲染配置（可选）", expanded=False):
+        st.caption("如果你看不到 Streamlit 后台 Secrets，就在这里临时填写百炼 Key。仅当前会话使用，不写入 GitHub。")
+        st.text_input(
+            "阿里云百炼 API Key",
+            type="password",
+            key="runtime_dashscope_api_key",
+            placeholder="sk-...",
+            help="不要把密钥发给别人；这里只用于当前网页会话生成写实渲染图。",
+        )
+        st.selectbox(
+            "图片模型",
+            options=["qwen-image", "wan2.2-t2i-plus"],
+            index=0,
+            key="runtime_image_model",
+            help="优先使用 qwen-image；如果你的百炼控制台未开通，可切换通义万相 wan2.2-t2i-plus。",
+        )
+        if st.session_state.get("runtime_dashscope_api_key"):
+            st.success("已填写临时百炼密钥。进入“设计图片”页点击写实渲染生成按钮。")
 
     with st.expander("📦 恢复历史结果归档", expanded=False):
         archive_file = st.file_uploader(
@@ -664,6 +692,7 @@ with tabs[8]:
             "在 Streamlit Cloud 打开 **Manage app → Settings → Secrets**，添加支持图片生成的 API 配置。"
             "DeepSeek 只负责优化提示词，不能替代图片生成模型；国内模型可直接使用阿里云百炼 DashScope。"
         )
+        st.info("如果公开页面右上角没有 Manage app，请直接在左侧“写实渲染配置（可选）”里临时填写阿里云百炼 API Key。")
         st.caption("推荐国内配置：通义万相 / Qwen-Image")
         st.code(
             'DASHSCOPE_API_KEY = "你的阿里云百炼API Key"\n'
