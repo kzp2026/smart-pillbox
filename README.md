@@ -64,11 +64,14 @@ set DEEPSEEK_MODEL=deepseek-v4-flash
 ```toml
 DASHSCOPE_API_KEY = "你的阿里云百炼API Key"
 IMAGE_PROVIDER = "dashscope"
-IMAGE_MODEL = "qwen-image-2.0-pro"
-# 如需通义万相可切换，但一致性弱于参考图链路：
+IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
+# 可选：qwen-image-max 更偏写实；qwen-image-plus 成本更低；通义万相一致性弱于 Qwen-Image 参考链路。
+# IMAGE_MODEL = "qwen-image-max"
 # IMAGE_MODEL = "wan2.2-t2i-plus"
-# 不建议使用旧 qwen-image，系统会自动升级为 qwen-image-2.0-pro。
+# 不建议使用旧 qwen-image，系统会自动升级为最新 qwen-image-2.0-pro。
 ```
+
+百炼生图通常按成功生成图片计费，不一定要订购固定套餐；但账号需要有免费额度、余额或对应模型调用权限。
 
 OpenAI 或其他兼容接口配置：
 ```toml

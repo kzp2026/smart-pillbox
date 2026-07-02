@@ -37,6 +37,9 @@ PALETTE = {
     "shadow": "#DDE7F0",
 }
 
+DEFAULT_DASHSCOPE_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
+IMAGE_GENERATION_EVENTS: list[dict[str, str]] = []
+
 
 # =========================
 # 2. 数据读取与字体工具
@@ -555,6 +558,17 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on", "enable", "enabled"}
 
 
+def record_image_event(output_path: Path, stage: str, status: str, message: str) -> None:
+    IMAGE_GENERATION_EVENTS.append(
+        {
+            "image": output_path.name,
+            "stage": stage,
+            "status": status,
+            "message": str(message)[:900],
+        }
+    )
+
+
 def get_image_api_config() -> dict:
     """读取图像生成接口配置。
 
@@ -566,10 +580,10 @@ def get_image_api_config() -> dict:
     dashscope_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_IMAGE_API_KEY")
     use_dashscope = provider in {"dashscope", "aliyun", "alibaba", "qwen", "qwen-image", "wanx"} or (dashscope_key and provider not in {"openai", "compatible", "openai-compatible"})
     if use_dashscope:
-        model = os.getenv("IMAGE_MODEL", "qwen-image-2.0-pro")
+        model = os.getenv("IMAGE_MODEL", DEFAULT_DASHSCOPE_IMAGE_MODEL)
         force_reference_model = False
         if model.strip().lower() == "qwen-image" and not env_bool("ALLOW_TEXT_ONLY_IMAGE_MODEL", False):
-            model = "qwen-image-2.0-pro"
+            model = DEFAULT_DASHSCOPE_IMAGE_MODEL
             force_reference_model = True
         return {
             "provider": "dashscope",
@@ -584,7 +598,7 @@ def get_image_api_config() -> dict:
             "prompt_extend": env_bool("DASHSCOPE_PROMPT_EXTEND", False),
             "negative_prompt": os.getenv(
                 "IMAGE_NEGATIVE_PROMPT",
-                "collage, contact sheet, split screen, multi panel grid, multiple product variants, unrelated product, inconsistent design, earbuds, earphones, charging case, bluetooth earbud case, jewelry box, cosmetic case, kitchen container, text-heavy poster, logo, watermark",
+                "collage, contact sheet, split screen, multi panel grid, multiple product variants, unrelated product, inconsistent design, earbuds, earphones, charging case, bluetooth earbud case, jewelry box, cosmetic case, kitchen container, flat illustration, vector drawing, schematic, wireframe, placeholder, blank panel, UI mockup, text-heavy poster, logo, watermark",
             ),
             "seed": os.getenv("IMAGE_SEED", "").strip(),
         }
@@ -614,18 +628,32 @@ def compatible_image_size(model: str, size: str) -> str:
     }.get(size, size)
 
 
-def dashscope_image_size(size: str) -> str:
+def dashscope_image_size(size: str, model: str = "") -> str:
+    normalized = model.strip().lower()
+    if normalized.startswith(("qwen-image-max", "qwen-image-plus")):
+        return {
+            "1024x1024": "1328*1328",
+            "1024x1792": "928*1664",
+            "1024x1536": "1104*1472",
+            "1792x1024": "1664*928",
+            "1536x1024": "1472*1104",
+        }.get(size, "1328*1328")
     return size.replace("x", "*")
 
 
 def is_dashscope_multimodal_model(model: str) -> bool:
     normalized = model.strip().lower()
-    return normalized.startswith("qwen-image-2") or normalized.startswith("wan2.7-image") or "edit" in normalized
+    return normalized.startswith("qwen-image")
+
+
+def supports_dashscope_reference_image(model: str) -> bool:
+    normalized = model.strip().lower()
+    return normalized.startswith("qwen-image-2.0") or "edit" in normalized
 
 
 def dashscope_parameters(size: str, config: dict, n: int = 1) -> dict:
     parameters: dict[str, object] = {
-        "size": dashscope_image_size(size),
+        "size": dashscope_image_size(size, str(config.get("model", ""))),
         "n": n,
         "prompt_extend": bool(config.get("prompt_extend", False)),
         "watermark": False,
@@ -672,8 +700,12 @@ def dashscope_request_json(url: str, api_key: str, payload: dict | None = None, 
         headers["X-DashScope-Async"] = "enable"
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise ValueError(f"DashScope HTTP {e.code}: {body[:1000]}") from e
 
 
 def download_image_url(image_url: str, output_path: Path) -> bool:
@@ -715,6 +747,7 @@ def generate_dashscope_image(prompt: str, output_path: Path, size: str, config: 
                 if not image_url:
                     raise ValueError(f"DashScope 任务成功但未返回图片 URL：{last_payload}")
                 if download_image_url(image_url, output_path):
+                    record_image_event(output_path, "dashscope_async", "success", "DashScope 异步文生图成功")
                     print(f"DashScope写实渲染完成：{output_path}")
                     return True
                 return False
@@ -723,6 +756,7 @@ def generate_dashscope_image(prompt: str, output_path: Path, size: str, config: 
             time.sleep(poll_interval)
         raise TimeoutError(f"DashScope 任务超时：{last_payload}")
     except (urllib.error.URLError, TimeoutError, ValueError, KeyError, IndexError) as e:
+        record_image_event(output_path, "dashscope_async", "failed", e)
         print(f"DashScope图片生成失败，已回退为离线示意图：{e}")
         return False
 
@@ -778,10 +812,14 @@ def generate_dashscope_multimodal_image(
         if not image_url:
             raise ValueError(f"DashScope 多模态任务未返回图片 URL：{response}")
         if download_image_url(image_url, output_path):
+            stage = "dashscope_reference" if reference_path and reference_path.exists() else "dashscope_text"
+            record_image_event(output_path, stage, "success", "DashScope 同步图像生成成功")
             print(f"DashScope参考图渲染完成：{output_path}")
             return True
         return False
     except (urllib.error.URLError, TimeoutError, ValueError, KeyError, IndexError) as e:
+        stage = "dashscope_reference" if reference_path and reference_path.exists() else "dashscope_text"
+        record_image_event(output_path, stage, "failed", e)
         print(f"DashScope参考图渲染失败，尝试普通文生图或回退示意图：{e}")
         return False
 
@@ -813,15 +851,18 @@ def generate_openai_image(prompt: str, output_path: Path, size: str, config: dic
         if image_url:
             import urllib.request
             urllib.request.urlretrieve(image_url, str(output_path))
+            record_image_event(output_path, "openai", "success", "OpenAI 兼容图片接口成功")
             print(f"AI渲染完成：{output_path}")
             return True
 
         image_base64 = getattr(image_data, "b64_json", None)
         if image_base64:
             output_path.write_bytes(base64.b64decode(image_base64))
+            record_image_event(output_path, "openai", "success", "OpenAI 兼容图片接口成功")
             print(f"AI渲染完成：{output_path}")
             return True
     except Exception as e:
+        record_image_event(output_path, "openai", "failed", e)
         print(f"图片模型生成失败，已回退为离线示意图：{e}")
 
     return False
@@ -837,16 +878,30 @@ def generate_ai_image(
     """按配置选择 OpenAI 兼容接口或阿里云百炼 DashScope 生成真实感渲染图。"""
     config = config or get_image_api_config()
     if config["provider"] == "dashscope":
-        if is_dashscope_multimodal_model(str(config.get("model", ""))):
-            ok = generate_dashscope_multimodal_image(prompt, output_path, size, config, reference_path=reference_path)
+        model = str(config.get("model", ""))
+        if is_dashscope_multimodal_model(model):
+            if reference_path and reference_path.exists() and supports_dashscope_reference_image(model):
+                ok = generate_dashscope_multimodal_image(prompt, output_path, size, config, reference_path=reference_path)
+                if ok:
+                    return True
+                record_image_event(output_path, "retry", "info", "参考图生成失败，自动改用同模型纯文本写实生成重试")
+            ok = generate_dashscope_multimodal_image(prompt, output_path, size, config, reference_path=None)
             if ok:
                 return True
+            if model.strip().lower().startswith("qwen-image-2.0"):
+                return False
         return generate_dashscope_image(prompt, output_path, size, config)
     return generate_openai_image(prompt, output_path, size, config)
 
 
 def structure_prompt_context(struct_df: pd.DataFrame) -> str:
     """把产品结构表压缩为适合图像提示词使用的部件清单。"""
+    product_hint = " ".join(struct_df.astype(str).fillna("").head(20).agg(" ".join, axis=1).tolist()) if not struct_df.empty else ""
+    if "药盒" in product_hint or "药仓" in product_hint:
+        return (
+            "半透明上盖、透明翻盖铰链、上壳体、防潮密封圈、七日分格药仓托盘、彩色药格盖片、"
+            "前置 LED 提醒屏、蜂鸣器、提醒电路板、纽扣/锂电池模块、USB-C 充电口、底部外壳、螺丝、卡扣"
+        )
     if struct_df.empty:
         return "根据产品功能合理拆分外壳、承力结构、连接件和功能组件"
 
@@ -991,6 +1046,11 @@ def build_image_prompts(product_name: str, req_df: pd.DataFrame, struct_df: pd.D
         top_keywords = "、".join(all_kws[:3]) if all_kws else ""
 
     structure_context = structure_prompt_context(struct_df)
+    if "药盒" in product_name:
+        structure_context = (
+            "半透明上盖、透明翻盖铰链、上壳体、防潮密封圈、七日分格药仓托盘、彩色药格盖片、"
+            "前置 LED 提醒屏、蜂鸣器、提醒电路板、锂电池模块、USB-C 充电口、底部外壳、螺丝、卡扣"
+        )
     consistency_lock = build_product_consistency_lock(product_name, req_df, struct_df)
 
     return f"""# {product_name} 产品设计图像生成提示词
@@ -999,10 +1059,10 @@ def build_image_prompts(product_name: str, req_df: pd.DataFrame, struct_df: pd.D
 {consistency_lock}
 
 ## 1. 产品效果图
-Prompt: 严格遵守“统一产品设计锁定”，专业的{product_name}产品设计渲染图，单一产品主体，不要拼贴图，不要多宫格，不要多个方案，展示同一款产品的整体外观、固定结构、材质、配色和核心功能模块，干净的白色背景，柔和的工作室灯光，高品质工业设计摄影风格，photorealistic，industrial design visualization，no logo，no watermark
+Prompt: 严格遵守“统一产品设计锁定”，专业的{product_name}产品写实工业设计渲染图，单一产品主体，不要拼贴图，不要多宫格，不要多个方案，真实 3D 产品摄影，PBR 材质，圆角塑料外壳、半透明翻盖、清晰分格结构、前置数码提醒屏，柔和工作室布光，浅色背景，真实阴影和高光，ultra realistic product render，photorealistic industrial design，no logo，no watermark，no flat illustration，no schematic
 
 ## 2. 产品爆炸图
-Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品结构爆炸图，必须是单张完整爆炸图，类似工程手表拆解图，沿中心垂直装配轴从上到下分层悬浮，必须拆解同一款产品而不是重新设计新产品，不要拼贴图，不要效果图合集，不得生成多宫格，不得生成耳机、耳机盒、充电盒或其他无关产品。严格依据以下部件进行拆分：{structure_context}。所有零部件沿中心垂直装配轴依次分离悬浮，保持正确装配顺序、统一透视、等距间隔且互不遮挡，左右两侧用水平引导线标注少量部件名称，白色背景，等距轴测视角，工程产品拆解图，engineering exploded view，single vertical exploded assembly diagram，photorealistic，industrial design visualization，no logo，no watermark
+Prompt: 严格遵守“统一产品设计锁定”，{product_name}写实 3D 产品结构爆炸图，效果参考高端智能手表拆解图：必须是单张完整爆炸图，白色/浅灰背景，等距轴测视角，所有零部件沿中心垂直装配轴从上到下分层悬浮、真实分离，部件有厚度、圆角、透视、阴影和材质高光，不是平面示意图。必须拆解同一款产品而不是重新设计新产品，不要拼贴图，不要效果图合集，不得生成多宫格，不得生成耳机、耳机盒、充电盒或其他无关产品。严格依据以下部件进行拆分：{structure_context}。左右两侧只用少量黑色中文部件标签和水平引导线标注，不要大段文字，engineering exploded view，single vertical exploded assembly，ultra realistic 3D product render，photorealistic，PBR material，no logo，no watermark，no flat vector，no infographic
 
 ## 3. 产品细节图
 Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品细节特写渲染图，单一产品局部特写，不要拼贴图，只放大同一款产品上的关键功能组件、连接方式、操作界面、人体工学细节和材质工艺，不能替换为不同造型或不同产品，微距摄影品质，干净背景，photorealistic，industrial design visualization，no logo，no watermark
@@ -1137,7 +1197,7 @@ def main() -> None:
     image_quality = image_config.get("quality")
     image_provider = image_config.get("provider")
     use_ai = args.ai_render or bool(image_api_key)
-    engineering_exploded = env_bool("STRICT_ENGINEERING_EXPLODED", True)
+    engineering_exploded = env_bool("STRICT_ENGINEERING_EXPLODED", False)
 
     output_dir = ensure_output_dir(args.output_dir)
     ensure_previous_outputs(output_dir, product_name)
@@ -1190,10 +1250,10 @@ def main() -> None:
         )
         ai_results["render"] = generate_ai_image(
             prompt_lines[0],
-            images["render"], "1024x1024", reference_path=identity_reference_path, config=image_config
+            images["render"], "1024x1024", reference_path=None, config=image_config
         ) if prompt_lines else False
 
-        reference_image = images["render"] if ai_results["render"] and images["render"].exists() else identity_reference_path
+        reference_image = images["render"] if ai_results["render"] and images["render"].exists() else None
 
         if engineering_exploded:
             print("爆炸图使用工程拆解图生成器，跳过容易产生多宫格的图像模型。")
@@ -1254,6 +1314,7 @@ def main() -> None:
         "reference_image_consistency": image_provider == "dashscope" and is_dashscope_multimodal_model(str(image_model or "")),
         "engineering_exploded": engineering_exploded,
         "images": ai_results,
+        "events": IMAGE_GENERATION_EVENTS,
     }
     status_path = image_dir / "写实渲染状态.json"
     status_path.write_text(json.dumps(render_status, ensure_ascii=False, indent=2), encoding="utf-8")

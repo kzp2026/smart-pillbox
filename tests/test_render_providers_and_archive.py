@@ -49,7 +49,7 @@ class RenderProviderAndArchiveTests(unittest.TestCase):
             url = request.full_url
             if url.endswith("/multimodal-generation/generation"):
                 body = json.loads(request.data.decode("utf-8"))
-                self.assertEqual(body["model"], "qwen-image-2.0-pro")
+                self.assertEqual(body["model"], "qwen-image-2.0-pro-2026-06-22")
                 self.assertIn("messages", body["input"])
                 self.assertEqual(body["parameters"]["size"], "1024*1024")
                 self.assertNotEqual(request.headers.get("X-dashscope-async"), "enable")

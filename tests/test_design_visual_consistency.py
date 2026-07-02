@@ -103,7 +103,7 @@ class DesignVisualConsistencyTests(unittest.TestCase):
         ):
             config = module.get_image_api_config()
 
-        self.assertEqual(config["model"], "qwen-image-2.0-pro")
+        self.assertEqual(config["model"], "qwen-image-2.0-pro-2026-06-22")
         self.assertTrue(config["force_reference_model"])
 
     def test_exploded_prompt_requires_single_vertical_technical_stack(self) -> None:
@@ -265,6 +265,42 @@ class DesignVisualConsistencyTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(output_bytes, b"PNG")
         self.assertEqual(len(requests), 1)
+
+    def test_reference_failure_retries_text_generation_before_fallback(self) -> None:
+        module = load_design_visuals_module()
+        requests = []
+
+        def fake_urlopen(request, timeout=0):
+            requests.append(request)
+            body = json.loads(request.data.decode("utf-8"))
+            content = body["input"]["messages"][0]["content"]
+            if any("image" in item for item in content):
+                return FakeResponse({"output": {"choices": [{"message": {"content": []}}]}})
+            return FakeResponse({"output": {"choices": [{"message": {"content": [{"image": "https://example.com/text.png"}]}}]}})
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reference_path = root / "reference.png"
+            output_path = root / "output.png"
+            Image.new("RGB", (8, 8), "white").save(reference_path)
+            config = {
+                "provider": "dashscope",
+                "api_key": "test-key",
+                "model": "qwen-image-2.0-pro",
+                "multimodal_url": "https://example.com/multimodal-generation/generation",
+                "base_url": "https://example.com/image-synthesis",
+                "task_url": "https://example.com/tasks/{task_id}",
+                "prompt_extend": False,
+                "negative_prompt": "collage",
+            }
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                with patch("urllib.request.urlretrieve", side_effect=lambda url, filename: Path(filename).write_bytes(b"PNG")):
+                    ok = module.generate_ai_image(
+                        "生成同一款产品细节图", output_path, "1024x1024", reference_path=reference_path, config=config
+                    )
+
+        self.assertTrue(ok)
+        self.assertEqual(len(requests), 2)
 
 
 if __name__ == "__main__":

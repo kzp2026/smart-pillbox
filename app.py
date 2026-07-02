@@ -296,25 +296,32 @@ def load_render_status() -> dict:
 def get_image_api_status() -> tuple[bool, str, str]:
     runtime_dashscope_key = str(st.session_state.get("runtime_dashscope_api_key", "")).strip()
     if runtime_dashscope_key:
-        return True, "阿里云百炼 DashScope（当前会话临时密钥）", str(st.session_state.get("runtime_image_model", "qwen-image-2.0-pro")).strip() or "qwen-image-2.0-pro"
+        return True, "阿里云百炼 DashScope（当前会话临时密钥）", normalize_runtime_image_model()
     dashscope_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_IMAGE_API_KEY")
     image_key = os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
     provider = os.getenv("IMAGE_PROVIDER", "").strip().lower()
     if provider in {"dashscope", "aliyun", "alibaba", "qwen", "qwen-image", "wanx"} or (dashscope_key and provider not in {"openai", "compatible", "openai-compatible"}):
-        configured_model = os.getenv("IMAGE_MODEL", "qwen-image-2.0-pro")
+        configured_model = os.getenv("IMAGE_MODEL", DEFAULT_IMAGE_MODEL)
         if configured_model.strip().lower() == "qwen-image":
-            configured_model = "qwen-image-2.0-pro（已自动升级）"
+            configured_model = f"{DEFAULT_IMAGE_MODEL}（已自动升级）"
         return bool(dashscope_key), "阿里云百炼 DashScope（通义万相 / Qwen-Image）", configured_model
     return bool(image_key), "OpenAI Images 兼容接口", os.getenv("IMAGE_MODEL", "gpt-image-1")
 
 
-IMAGE_MODEL_OPTIONS = ["qwen-image-2.0-pro", "wan2.2-t2i-plus"]
+DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
+IMAGE_MODEL_OPTIONS = [
+    DEFAULT_IMAGE_MODEL,
+    "qwen-image-2.0-pro",
+    "qwen-image-max",
+    "qwen-image-plus",
+    "wan2.2-t2i-plus",
+]
 
 
 def normalize_runtime_image_model() -> str:
-    model = str(st.session_state.get("runtime_image_model", "qwen-image-2.0-pro")).strip()
+    model = str(st.session_state.get("runtime_image_model", DEFAULT_IMAGE_MODEL)).strip()
     if model not in IMAGE_MODEL_OPTIONS:
-        model = "qwen-image-2.0-pro"
+        model = DEFAULT_IMAGE_MODEL
         st.session_state["runtime_image_model"] = model
     return model
 
@@ -416,8 +423,9 @@ with st.sidebar:
             options=IMAGE_MODEL_OPTIONS,
             index=0,
             key="runtime_image_model",
-            help="优先使用 qwen-image-2.0-pro，它支持参考图链路，更容易保持六张图为同一产品。",
+            help="优先使用最新 qwen-image-2.0-pro 快照；qwen-image-max 更写实但参考图一致性弱一些。",
         )
+        st.caption("百炼生图通常按成功生成图片计费，不一定要订套餐；但账号需要有免费额度、余额或对应模型调用权限。")
         if st.session_state.get("runtime_dashscope_api_key"):
             st.success("已填写临时百炼密钥。进入“设计图片”页点击写实渲染生成按钮。")
 
@@ -649,10 +657,11 @@ with tabs[8]:
         st.code(
             'DASHSCOPE_API_KEY = "你的阿里云百炼API Key"\n'
             'IMAGE_PROVIDER = "dashscope"\n'
-            'IMAGE_MODEL = "qwen-image-2.0-pro"\n'
-            '# 如需通义万相可切换，但一致性弱于参考图链路：\n'
+            'IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"\n'
+            '# 可选：qwen-image-max 更偏写实；qwen-image-plus 成本更低；通义万相一致性弱于 Qwen-Image 参考链路。\n'
+            '# IMAGE_MODEL = "qwen-image-max"\n'
             '# IMAGE_MODEL = "wan2.2-t2i-plus"\n'
-            '# 不建议使用旧 qwen-image，系统会自动升级为 qwen-image-2.0-pro。',
+            '# 不建议使用旧 qwen-image，系统会自动升级为最新 qwen-image-2.0-pro。',
             language="toml",
         )
         st.caption("OpenAI 或其他兼容接口配置：")
@@ -699,6 +708,16 @@ with tabs[8]:
         elif render_status:
             suffix = "；爆炸图已按工程拆解图生成" if engineering_exploded else ""
             st.warning(f"图片模型已配置，但本次仅 {success_count}/{target_count} 张写实图生成成功{suffix}；失败项目已自动回退为离线示意图。")
+            events = render_status.get("events") or []
+            failed_events = [event for event in events if event.get("status") == "failed"]
+            if failed_events:
+                with st.expander("查看图片生成失败原因"):
+                    for event in failed_events[-8:]:
+                        st.code(
+                            f"{event.get('image', '')} / {event.get('stage', '')}\n{event.get('message', '')}",
+                            language="text",
+                        )
+                    st.caption("如果提示模型无权限、余额不足、Quota 不足或欠费，需要在阿里云百炼控制台开通对应模型/充值；如果只是参考图失败，系统会自动改用同模型纯文本写实重试。")
         else:
             st.info("图片模型密钥已配置。点击上方按钮生成六类写实渲染图。")
     else:
