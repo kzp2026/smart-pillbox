@@ -192,6 +192,19 @@ def draw_material_palette(draw: ImageDraw.ImageDraw, left: int, top: int) -> Non
         draw.text((x + 39, top + 88), label, font=load_font(14), fill="#53442A", anchor="ma")
 
 
+def board_section_labels() -> list[str]:
+    return [
+        "01 设计说明 / Design description",
+        "02 功能分析 / Functional analysis",
+        "03 爆炸分析 / Exploded View",
+        "04 细节分析 / Detail",
+        "05 结构工艺 / Structure",
+        "06 材质分析 / Material",
+        "07 三视图 / Three View",
+        "08 效果图展示 / Rendering",
+    ]
+
+
 def first_available(row: pd.Series, names: list[str]) -> str:
     for name in names:
         value = str(row.get(name, "")).strip()
@@ -339,9 +352,16 @@ def create_board(path: Path, images: dict[str, Path], req_df: pd.DataFrame, topi
         draw.text((615, 1285 + index * 30), f"• {note}", font=load_font(15), fill="#493923")
 
     rounded_rect(draw, (1110, 875, 1576, 1122), "#FFFDF7", "#CBBCA2", radius=12)
-    draw_section_title(draw, 1130, 900, "05", "色彩分析", "Color analysis")
-    draw_material_palette(draw, 1142, 980)
-    draw_wrapped(draw, (1142, 1110), "以低饱和浅色与金属质感为主，强调清洁、安全和可靠的产品气质。", font_body, "#493923", 390, line_gap=6)
+    draw_section_title(draw, 1130, 900, "05", "结构工艺", "Structure")
+    structure_notes = [
+        "模块分层清楚",
+        "装配路径可理解",
+        "操作与维护便利",
+    ]
+    for index, note in enumerate(structure_notes):
+        note_y = 970 + index * 45
+        rounded_rect(draw, (1142, note_y, 1538, note_y + 32), "#F2EAD9", None, radius=10)
+        draw.text((1160, note_y + 8), f"• {note}", font=load_font(15), fill="#493923")
 
     rounded_rect(draw, (1110, 1142, 1576, 1390), "#FFFDF7", "#CBBCA2", radius=12)
     draw_section_title(draw, 1130, 1162, "06", "材质分析", "Material")
@@ -384,6 +404,118 @@ def create_simple_placeholder(path: Path, label: str) -> None:
     rounded_rect(draw, (60, 60, w - 60, h - 60), PALETTE["white"], PALETTE["line"])
     draw.text((w // 2, h // 2), f"〔{label}〕", font=load_font(24), fill=PALETTE["muted"], anchor="mm")
     draw.text((w // 2, h - 40), "示意图 — 可替换为AI渲染图", font=load_font(12), fill=PALETTE["muted"], anchor="mb")
+    img.save(path)
+
+
+def exploded_component_stack(product_name: str, struct_df: pd.DataFrame) -> list[tuple[str, str, str]]:
+    if "药盒" in product_name:
+        return [
+            ("透明翻盖", "半透明保护上盖 / 开合铰链", "#DDEFF4"),
+            ("密封圈", "防潮软胶圈", "#B8DAD8"),
+            ("七日分格药仓", "多格分类收纳药片", "#F8F5EA"),
+            ("前置提醒屏", "时间与服药状态显示", "#15212F"),
+            ("提醒电路板", "主控、蜂鸣器与指示灯", "#2D4052"),
+            ("电池模块", "可充电锂电池", "#C9CDD2"),
+            ("底部外壳", "圆角承托结构", "#F2F4F5"),
+            ("螺丝 / 卡扣", "固定件与装配连接", "#9AA3AD"),
+        ]
+
+    names = collect_prompt_terms(struct_df, ["结构名称", "结构描述"], limit=8)
+    if not names:
+        names = ["上盖", "功能模块", "承力结构", "连接件", "底壳", "固定件"]
+    palette = ["#DDEFF4", "#F8F5EA", "#E8EDF2", "#D8E7DA", "#F0E2CE", "#CED7E0", "#F2F4F5", "#9AA3AD"]
+    return [(compact_text(name, 12), "结构拆解部件", palette[index % len(palette)]) for index, name in enumerate(names[:8])]
+
+
+def create_exploded_schematic(path: Path, product_name: str, struct_df: pd.DataFrame) -> None:
+    """生成稳定的工程爆炸图，避免图像模型输出多宫格或其他产品。"""
+    w, h = 1200, 1600
+    img = Image.new("RGB", (w, h), "#F7F8FA")
+    draw = ImageDraw.Draw(img)
+    draw.text((w // 2, 56), f"{product_name} 工程爆炸图", font=load_font(34, bold=True), fill="#101828", anchor="mt")
+    draw.text((w // 2, 105), "单张完整爆炸图 · 沿中心垂直装配轴从上到下分层悬浮", font=load_font(18), fill="#5C6B7A", anchor="mt")
+
+    components = exploded_component_stack(product_name, struct_df)
+    center_x = w // 2
+    start_y = 210
+    gap = 145
+    draw.line((center_x, 165, center_x, h - 170), fill="#CBD5E1", width=3)
+    draw.polygon([(center_x - 10, h - 175), (center_x + 10, h - 175), (center_x, h - 150)], fill="#94A3B8")
+
+    for index, (name, description, color) in enumerate(components):
+        y = start_y + index * gap
+        width = 430 if index not in {3, 4, 5, 7} else 300
+        height = 78 if index not in {1, 7} else 46
+        left = center_x - width // 2
+        top = y
+        right = center_x + width // 2
+        bottom = y + height
+        shadow = (left + 8, top + 9, right + 8, bottom + 9)
+        rounded_rect(draw, shadow, "#D9E1EA", None, radius=height // 2)
+        rounded_rect(draw, (left, top, right, bottom), color, "#8794A3", radius=height // 2, width=2)
+
+        if "药仓" in name:
+            cell_w = (width - 90) // 4
+            for row in range(2):
+                for col in range(4):
+                    cell_left = left + 45 + col * cell_w
+                    cell_top = top + 15 + row * 25
+                    rounded_rect(draw, (cell_left, cell_top, cell_left + cell_w - 9, cell_top + 18), "#FFFFFF", "#C7D0DA", radius=7, width=1)
+        elif "电路板" in name:
+            for chip_index in range(4):
+                chip_x = left + 42 + chip_index * 58
+                rounded_rect(draw, (chip_x, top + 18, chip_x + 42, top + 44), "#101828", None, radius=5)
+        elif "屏" in name:
+            rounded_rect(draw, (center_x - 86, top + 16, center_x + 86, top + 55), "#0B1220", None, radius=18)
+            draw.text((center_x, top + 25), "08:30", font=load_font(18, bold=True), fill="#47F5C6", anchor="mt")
+        elif "螺丝" in name or "卡扣" in name:
+            for screw_index in range(5):
+                screw_x = center_x - 180 + screw_index * 90
+                draw.ellipse((screw_x - 14, top + 4, screw_x + 14, top + 32), fill="#AAB3BE", outline="#64748B", width=2)
+
+        label_right = index % 2 == 0
+        label_x = 875 if label_right else 110
+        line_end_x = right + 24 if label_right else left - 24
+        line_start_x = label_x - 18 if label_right else label_x + 255
+        line_y = top + height // 2
+        draw.line((line_start_x, line_y, line_end_x, line_y), fill="#64748B", width=2)
+        draw.text((label_x, line_y - 27), name, font=load_font(22, bold=True), fill="#172033")
+        draw_wrapped(draw, (label_x, line_y + 4), description, load_font(15), "#5C6B7A", 250, line_gap=5)
+
+    draw.text((w // 2, h - 74), "PM校验：无多宫格、无耳机盒、无无关产品；仅展示当前产品的装配拆解关系。", font=load_font(17), fill="#475569", anchor="mm")
+    img.save(path)
+
+
+def create_product_identity_reference_image(path: Path, product_name: str) -> None:
+    """生成给图像模型使用的产品身份参考图，降低把产品画成相邻品类的概率。"""
+    w, h = 1024, 1024
+    img = Image.new("RGB", (w, h), "#F8FAFC")
+    draw = ImageDraw.Draw(img)
+    draw.text((w // 2, 48), f"{product_name} 产品身份参考图", font=load_font(34, bold=True), fill="#102033", anchor="mt")
+    draw.text((w // 2, 96), "仅用于锁定产品品类、轮廓和关键结构；不是最终渲染图", font=load_font(18), fill="#5C6B7A", anchor="mt")
+
+    if "药盒" in product_name:
+        body = (180, 310, 844, 710)
+        lid = (215, 210, 810, 365)
+        rounded_rect(draw, (body[0] + 12, body[1] + 18, body[2] + 12, body[3] + 18), "#D7E3EC", None, radius=64)
+        rounded_rect(draw, body, "#FFFFFF", "#6B7C8F", radius=64, width=4)
+        rounded_rect(draw, lid, "#DDEFF4", "#7893AA", radius=54, width=4)
+        draw.text((w // 2, 248), "透明翻盖", font=load_font(22, bold=True), fill="#536879", anchor="mt")
+        cell_colors = ["#B9E5D8", "#F7D774", "#F79B8E", "#9FC7F3", "#C8E6C9", "#FFE0B2", "#D7C2F2", "#E2E8F0"]
+        for row in range(2):
+            for col in range(4):
+                cell_left = 235 + col * 145
+                cell_top = 405 + row * 95
+                rounded_rect(draw, (cell_left, cell_top, cell_left + 110, cell_top + 62), cell_colors[row * 4 + col], "#A6B2BF", radius=18, width=2)
+        rounded_rect(draw, (407, 610, 617, 675), "#0F172A", None, radius=30)
+        draw.text((512, 626), "08:30", font=load_font(24, bold=True), fill="#44F2C4", anchor="mt")
+        draw.text((w // 2, 750), "必须是智能分格药盒：透明翻盖 + 多格药仓 + 前置提醒屏", font=load_font(22, bold=True), fill="#102033", anchor="mt")
+        draw.text((w // 2, 805), "禁止出现：耳机、耳机盒、充电盒、化妆盒、首饰盒、厨房收纳盒、多方案拼贴", font=load_font(20, bold=True), fill="#B42318", anchor="mt")
+    else:
+        rounded_rect(draw, (210, 300, 814, 710), "#FFFFFF", "#6B7C8F", radius=70, width=4)
+        draw.text((w // 2, 470), f"{product_name}\n单一产品主体", font=load_font(40, bold=True), fill="#102033", anchor="mm", align="center")
+        draw.text((w // 2, 780), f"禁止出现与“{product_name}”无关的产品", font=load_font(22, bold=True), fill="#B42318", anchor="mt")
+
     img.save(path)
 
 
@@ -435,6 +567,10 @@ def get_image_api_config() -> dict:
     use_dashscope = provider in {"dashscope", "aliyun", "alibaba", "qwen", "qwen-image", "wanx"} or (dashscope_key and provider not in {"openai", "compatible", "openai-compatible"})
     if use_dashscope:
         model = os.getenv("IMAGE_MODEL", "qwen-image-2.0-pro")
+        force_reference_model = False
+        if model.strip().lower() == "qwen-image" and not env_bool("ALLOW_TEXT_ONLY_IMAGE_MODEL", False):
+            model = "qwen-image-2.0-pro"
+            force_reference_model = True
         return {
             "provider": "dashscope",
             "api_key": dashscope_key,
@@ -444,10 +580,11 @@ def get_image_api_config() -> dict:
             "model": model,
             "quality": os.getenv("IMAGE_QUALITY", "standard"),
             "custom_base_url": bool(os.getenv("DASHSCOPE_IMAGE_API_URL")),
+            "force_reference_model": force_reference_model,
             "prompt_extend": env_bool("DASHSCOPE_PROMPT_EXTEND", False),
             "negative_prompt": os.getenv(
                 "IMAGE_NEGATIVE_PROMPT",
-                "collage, split screen, multiple product variants, unrelated product, inconsistent design, text-heavy poster, logo, watermark",
+                "collage, contact sheet, split screen, multi panel grid, multiple product variants, unrelated product, inconsistent design, earbuds, earphones, charging case, bluetooth earbud case, jewelry box, cosmetic case, kitchen container, text-heavy poster, logo, watermark",
             ),
             "seed": os.getenv("IMAGE_SEED", "").strip(),
         }
@@ -796,6 +933,7 @@ def build_pm_image_review_records(
     ai_results: dict[str, bool],
     reference_enabled: bool,
     consistency_lock: str,
+    engineering_exploded: bool = False,
 ) -> list[dict[str, str]]:
     """以产品经理视角生成六类图片的验收清单。"""
     reference_status = "通过" if reference_enabled else "需人工复核"
@@ -822,11 +960,11 @@ def build_pm_image_review_records(
         ("usage", "产品使用效果图", "人物动作、产品尺度和使用场景是否真实合理", "目标用户、空间关系、尺度真实性"),
     ]
     for key, image_type, check_item, basis in checks:
-        generated = True if key == "board" else bool(ai_results.get(key, False))
+        generated = True if key == "board" or (key == "exploded" and engineering_exploded) else bool(ai_results.get(key, False))
         file_exists = images.get(key, Path()).exists()
         if generated and (file_exists or key == "board"):
             status = "通过"
-            advice = "可进入方案评价；若肉眼发现偏差，可单独重生成该图。"
+            advice = "爆炸图已采用工程拆解图生成器。" if key == "exploded" and engineering_exploded else "可进入方案评价；若肉眼发现偏差，可单独重生成该图。"
         else:
             status = "需重生成"
             advice = "当前未生成高质量写实图或已回退示意图，建议检查 API 配置后重新生成。"
@@ -864,7 +1002,7 @@ def build_image_prompts(product_name: str, req_df: pd.DataFrame, struct_df: pd.D
 Prompt: 严格遵守“统一产品设计锁定”，专业的{product_name}产品设计渲染图，单一产品主体，不要拼贴图，不要多宫格，不要多个方案，展示同一款产品的整体外观、固定结构、材质、配色和核心功能模块，干净的白色背景，柔和的工作室灯光，高品质工业设计摄影风格，photorealistic，industrial design visualization，no logo，no watermark
 
 ## 2. 产品爆炸图
-Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品结构爆炸图，必须拆解同一款产品而不是重新设计新产品，不要拼贴图，不要效果图合集，严格依据以下部件进行拆分：{structure_context}。所有零部件沿垂直装配轴依次分离悬浮，保持正确装配顺序、统一透视、等距间隔且互不遮挡，清晰展示外壳、承力结构、连接方式和功能组件之间的装配关系；右侧只保留少量部件名称与水平引导线，白色背景，等距轴测视角，照片级工业设计产品渲染，engineering exploded view，photorealistic，industrial design visualization，no logo，no watermark
+Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品结构爆炸图，必须是单张完整爆炸图，类似工程手表拆解图，沿中心垂直装配轴从上到下分层悬浮，必须拆解同一款产品而不是重新设计新产品，不要拼贴图，不要效果图合集，不得生成多宫格，不得生成耳机、耳机盒、充电盒或其他无关产品。严格依据以下部件进行拆分：{structure_context}。所有零部件沿中心垂直装配轴依次分离悬浮，保持正确装配顺序、统一透视、等距间隔且互不遮挡，左右两侧用水平引导线标注少量部件名称，白色背景，等距轴测视角，工程产品拆解图，engineering exploded view，single vertical exploded assembly diagram，photorealistic，industrial design visualization，no logo，no watermark
 
 ## 3. 产品细节图
 Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品细节特写渲染图，单一产品局部特写，不要拼贴图，只放大同一款产品上的关键功能组件、连接方式、操作界面、人体工学细节和材质工艺，不能替换为不同造型或不同产品，微距摄影品质，干净背景，photorealistic，industrial design visualization，no logo，no watermark
@@ -929,7 +1067,7 @@ def maybe_enhance_image_prompts(
 2. 六条提示词必须表现同一款产品：同一轮廓、同一颜色、同一材料、同一部件数量、同一安装方式和同一尺寸比例；只能改变视角、拆解、特写、展板排版和使用场景。
 3. 每条 Prompt 都必须明确写入“严格遵守统一产品设计锁定”。
 4. 产品效果图要说明造型、材质、颜色、核心结构、视角、灯光和背景。
-5. 爆炸图必须严格使用“产品结构”中的真实部件，沿装配轴分层拆开并保持正确装配关系。
+5. 爆炸图必须严格使用“产品结构”中的真实部件，输出单张完整爆炸图，沿中心垂直装配轴从上到下分层悬浮，类似工程手表拆解图；不得生成多宫格、拼贴图、效果图合集、耳机、耳机盒、充电盒或其他无关产品。
 6. 产品细节图要展示关键连接、操作界面、材料工艺和人体工学细节。
 7. 产品三视图必须包含统一比例且严格对齐的正视图、侧视图和俯视图，不得使用透视视角。
 8. 设计展板要整合效果图、爆炸图、细节图、三视图、使用效果图和需求要点，避免难以辨认的大段文字。
@@ -999,6 +1137,7 @@ def main() -> None:
     image_quality = image_config.get("quality")
     image_provider = image_config.get("provider")
     use_ai = args.ai_render or bool(image_api_key)
+    engineering_exploded = env_bool("STRICT_ENGINEERING_EXPLODED", True)
 
     output_dir = ensure_output_dir(args.output_dir)
     ensure_previous_outputs(output_dir, product_name)
@@ -1031,6 +1170,8 @@ def main() -> None:
     prompt_path.write_text(prompts_text, encoding="utf-8")
     consistency_lock_path = image_dir / "产品一致性设计锁.txt"
     consistency_lock_path.write_text(consistency_lock, encoding="utf-8")
+    identity_reference_path = image_dir / "产品身份参考图.png"
+    create_product_identity_reference_image(identity_reference_path, product_name)
     print(f"渲染提示词生成方式：{prompt_method}")
 
     # 尝试 AI 渲染
@@ -1049,15 +1190,19 @@ def main() -> None:
         )
         ai_results["render"] = generate_ai_image(
             prompt_lines[0],
-            images["render"], "1024x1024", config=image_config
+            images["render"], "1024x1024", reference_path=identity_reference_path, config=image_config
         ) if prompt_lines else False
 
-        reference_image = images["render"] if ai_results["render"] and images["render"].exists() else None
+        reference_image = images["render"] if ai_results["render"] and images["render"].exists() else identity_reference_path
 
-        ai_results["exploded"] = generate_ai_image(
-            prompt_lines[1],
-            images["exploded"], "1024x1792", reference_path=reference_image, config=image_config
-        ) if len(prompt_lines) > 1 else False
+        if engineering_exploded:
+            print("爆炸图使用工程拆解图生成器，跳过容易产生多宫格的图像模型。")
+            ai_results["exploded"] = False
+        else:
+            ai_results["exploded"] = generate_ai_image(
+                prompt_lines[1],
+                images["exploded"], "1024x1792", reference_path=reference_image, config=image_config
+            ) if len(prompt_lines) > 1 else False
 
         ai_results["detail"] = generate_ai_image(
             prompt_lines[2],
@@ -1084,8 +1229,8 @@ def main() -> None:
     if not ai_results["detail"]:
         create_simple_placeholder(images["detail"], f"{product_name} 细节图")
 
-    if not ai_results["exploded"]:
-        create_simple_placeholder(images["exploded"], f"{product_name} 产品爆炸图")
+    if engineering_exploded or not ai_results["exploded"]:
+        create_exploded_schematic(images["exploded"], product_name, struct_df)
 
     if not ai_results["three_view"]:
         create_three_view_placeholder(images["three_view"], product_name)
@@ -1095,7 +1240,8 @@ def main() -> None:
 
     create_board(images["board"], images, req_df, topic_df, product_name)
 
-    ai_success_count = sum(ai_results.values())
+    ai_target_keys = ["render", "detail", "three_view", "usage"] if engineering_exploded else list(ai_results)
+    ai_success_count = sum(bool(ai_results.get(key, False)) for key in ai_target_keys)
     render_status = {
         "image_api_configured": bool(image_api_key),
         "provider": image_provider if image_api_key else None,
@@ -1103,9 +1249,10 @@ def main() -> None:
         "quality": image_quality if image_api_key else None,
         "custom_base_url": bool(image_config.get("custom_base_url")),
         "ai_success_count": ai_success_count,
-        "ai_target_count": len(ai_results),
+        "ai_target_count": len(ai_target_keys),
         "consistency_lock_file": str(consistency_lock_path.name),
         "reference_image_consistency": image_provider == "dashscope" and is_dashscope_multimodal_model(str(image_model or "")),
+        "engineering_exploded": engineering_exploded,
         "images": ai_results,
     }
     status_path = image_dir / "写实渲染状态.json"
@@ -1120,6 +1267,7 @@ def main() -> None:
         ai_results,
         reference_enabled=reference_enabled,
         consistency_lock=consistency_lock,
+        engineering_exploded=engineering_exploded,
     )
     pm_review_path = image_dir / "设计图片PM验收表.xlsx"
     pd.DataFrame(pm_review_records).to_excel(pm_review_path, index=False)
@@ -1132,6 +1280,7 @@ def main() -> None:
         {"图像类型": "产品三视图", "文件路径": str(images["three_view"]), "用途": f"展示{product_name}正视图、侧视图和俯视图"},
         {"图像类型": "产品设计展板", "文件路径": str(images["board"]), "用途": "用于论文答辩、课程展示或设计汇报"},
         {"图像类型": "产品使用效果图", "文件路径": str(images["usage"]), "用途": f"展示{product_name}真实使用场景"},
+        {"图像类型": "产品身份参考图", "文件路径": str(identity_reference_path), "用途": "锁定当前产品品类，避免生成无关产品"},
         {"图像类型": "图像生成提示词", "文件路径": str(prompt_path), "用途": "可复制到图像生成模型进一步渲染"},
         {"图像类型": "产品一致性设计锁", "文件路径": str(consistency_lock_path), "用途": "约束六类写实渲染图保持同一款产品"},
         {"图像类型": "PM视觉验收表", "文件路径": str(pm_review_path), "用途": "从产品一致性、细节、美观度和合理性检查设计图片"},
@@ -1148,6 +1297,7 @@ def main() -> None:
             print(f"已生成：{img_path}")
     print(f"已生成：{prompt_path}")
     print(f"已生成：{consistency_lock_path}")
+    print(f"已生成：{identity_reference_path}")
     print(f"已生成：{pm_review_path}")
     print(f"已生成：{manifest_path}")
 

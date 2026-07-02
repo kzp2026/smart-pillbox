@@ -65,9 +65,9 @@ set DEEPSEEK_MODEL=deepseek-v4-flash
 DASHSCOPE_API_KEY = "你的阿里云百炼API Key"
 IMAGE_PROVIDER = "dashscope"
 IMAGE_MODEL = "qwen-image-2.0-pro"
-# 如控制台暂未开通参考图模型，可临时改用：
-# IMAGE_MODEL = "qwen-image"
+# 如需通义万相可切换，但一致性弱于参考图链路：
 # IMAGE_MODEL = "wan2.2-t2i-plus"
+# 不建议使用旧 qwen-image，系统会自动升级为 qwen-image-2.0-pro。
 ```
 
 OpenAI 或其他兼容接口配置：

@@ -40,21 +40,20 @@ class FakeResponse:
 
 
 class RenderProviderAndArchiveTests(unittest.TestCase):
-    def test_dashscope_provider_uses_async_image_synthesis_api(self) -> None:
+    def test_dashscope_provider_uses_reference_image_model_by_default(self) -> None:
         module = load_design_visuals_module()
         requests = []
 
         def fake_urlopen(request, timeout=0):
             requests.append(request)
             url = request.full_url
-            if url.endswith("/image-synthesis"):
+            if url.endswith("/multimodal-generation/generation"):
                 body = json.loads(request.data.decode("utf-8"))
-                self.assertEqual(body["model"], "qwen-image")
+                self.assertEqual(body["model"], "qwen-image-2.0-pro")
+                self.assertIn("messages", body["input"])
                 self.assertEqual(body["parameters"]["size"], "1024*1024")
-                self.assertEqual(request.headers.get("X-dashscope-async"), "enable")
-                return FakeResponse({"output": {"task_id": "task-123"}})
-            if url.endswith("/tasks/task-123"):
-                return FakeResponse({"output": {"task_status": "SUCCEEDED", "results": [{"url": "https://example.com/render.png"}]}})
+                self.assertNotEqual(request.headers.get("X-dashscope-async"), "enable")
+                return FakeResponse({"output": {"choices": [{"message": {"content": [{"image": "https://example.com/render.png"}]}}]}})
             raise AssertionError(f"unexpected url {url}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -66,7 +65,7 @@ class RenderProviderAndArchiveTests(unittest.TestCase):
 
             self.assertTrue(ok)
             self.assertEqual(output_path.read_bytes(), b"PNG")
-            self.assertEqual(len(requests), 2)
+            self.assertEqual(len(requests), 1)
 
     def test_result_archive_round_trip_and_path_traversal_rejected(self) -> None:
         from scripts.result_archive import build_result_archive, extract_result_archive

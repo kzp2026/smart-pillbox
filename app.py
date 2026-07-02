@@ -113,10 +113,12 @@ def get_download_files() -> list[str]:
         f"design_images/{p}产品三视图.png",
         f"design_images/{p}产品设计展板.png",
         f"design_images/{p}产品使用效果图.png",
+        "design_images/产品身份参考图.png",
         "design_images/设计图像生成提示词.txt",
         "design_images/产品一致性设计锁.txt",
         "design_images/设计图片PM验收表.xlsx",
         "design_images/设计图像清单.xlsx",
+        "design_images/写实渲染状态.json",
         "方案评价表.xlsx",
         "方案评价结果.json",
         "方案优化建议.txt",
@@ -186,7 +188,7 @@ def run_stage(script_name: str, input_path: Path | None = None) -> subprocess.Co
     if runtime_dashscope_key:
         env["DASHSCOPE_API_KEY"] = runtime_dashscope_key
         env["IMAGE_PROVIDER"] = "dashscope"
-        env["IMAGE_MODEL"] = str(st.session_state.get("runtime_image_model", "qwen-image-2.0-pro")).strip() or "qwen-image-2.0-pro"
+        env["IMAGE_MODEL"] = normalize_runtime_image_model()
     return subprocess.run(command, cwd=ROOT_DIR, capture_output=True, text=True, env=env)
 
 
@@ -299,8 +301,22 @@ def get_image_api_status() -> tuple[bool, str, str]:
     image_key = os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
     provider = os.getenv("IMAGE_PROVIDER", "").strip().lower()
     if provider in {"dashscope", "aliyun", "alibaba", "qwen", "qwen-image", "wanx"} or (dashscope_key and provider not in {"openai", "compatible", "openai-compatible"}):
-        return bool(dashscope_key), "阿里云百炼 DashScope（通义万相 / Qwen-Image）", os.getenv("IMAGE_MODEL", "qwen-image-2.0-pro")
+        configured_model = os.getenv("IMAGE_MODEL", "qwen-image-2.0-pro")
+        if configured_model.strip().lower() == "qwen-image":
+            configured_model = "qwen-image-2.0-pro（已自动升级）"
+        return bool(dashscope_key), "阿里云百炼 DashScope（通义万相 / Qwen-Image）", configured_model
     return bool(image_key), "OpenAI Images 兼容接口", os.getenv("IMAGE_MODEL", "gpt-image-1")
+
+
+IMAGE_MODEL_OPTIONS = ["qwen-image-2.0-pro", "wan2.2-t2i-plus"]
+
+
+def normalize_runtime_image_model() -> str:
+    model = str(st.session_state.get("runtime_image_model", "qwen-image-2.0-pro")).strip()
+    if model not in IMAGE_MODEL_OPTIONS:
+        model = "qwen-image-2.0-pro"
+        st.session_state["runtime_image_model"] = model
+    return model
 
 
 def load_json_output(relative_path: str) -> dict:
@@ -394,9 +410,10 @@ with st.sidebar:
             placeholder="sk-...",
             help="不要把密钥发给别人；这里只用于当前网页会话生成写实渲染图。",
         )
+        normalize_runtime_image_model()
         st.selectbox(
             "图片模型",
-            options=["qwen-image-2.0-pro", "qwen-image", "wan2.2-t2i-plus"],
+            options=IMAGE_MODEL_OPTIONS,
             index=0,
             key="runtime_image_model",
             help="优先使用 qwen-image-2.0-pro，它支持参考图链路，更容易保持六张图为同一产品。",
@@ -633,9 +650,9 @@ with tabs[8]:
             'DASHSCOPE_API_KEY = "你的阿里云百炼API Key"\n'
             'IMAGE_PROVIDER = "dashscope"\n'
             'IMAGE_MODEL = "qwen-image-2.0-pro"\n'
-            '# 如果控制台暂未开通参考图模型，可临时改用：\n'
-            '# IMAGE_MODEL = "qwen-image"\n'
-            '# IMAGE_MODEL = "wan2.2-t2i-plus"',
+            '# 如需通义万相可切换，但一致性弱于参考图链路：\n'
+            '# IMAGE_MODEL = "wan2.2-t2i-plus"\n'
+            '# 不建议使用旧 qwen-image，系统会自动升级为 qwen-image-2.0-pro。',
             language="toml",
         )
         st.caption("OpenAI 或其他兼容接口配置：")
@@ -675,10 +692,13 @@ with tabs[8]:
         target_count = int(render_status.get("ai_target_count", 5))
         provider_name = render_status.get("provider") or image_provider_label
         model_name = render_status.get("model") or image_model_name
+        engineering_exploded = bool(render_status.get("engineering_exploded"))
         if render_status and success_count == target_count:
-            st.success(f"图片模型已连接：{provider_name} / {model_name}，本次 {success_count}/{target_count} 张写实图生成成功，展板已自动合成。")
+            suffix = "，爆炸图已按工程拆解图生成" if engineering_exploded else ""
+            st.success(f"图片模型已连接：{provider_name} / {model_name}，本次 {success_count}/{target_count} 张写实图生成成功{suffix}，展板已自动合成。")
         elif render_status:
-            st.warning(f"图片模型已配置，但本次仅 {success_count}/{target_count} 张写实图生成成功；失败项目已自动回退为离线示意图。")
+            suffix = "；爆炸图已按工程拆解图生成" if engineering_exploded else ""
+            st.warning(f"图片模型已配置，但本次仅 {success_count}/{target_count} 张写实图生成成功{suffix}；失败项目已自动回退为离线示意图。")
         else:
             st.info("图片模型密钥已配置。点击上方按钮生成六类写实渲染图。")
     else:

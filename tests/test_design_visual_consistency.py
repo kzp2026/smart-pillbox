@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import json
 import sys
 import tempfile
@@ -93,6 +94,40 @@ class DesignVisualConsistencyTests(unittest.TestCase):
         self.assertIn("单一产品主体", prompts_text)
         self.assertIn("不要拼贴图", prompts_text)
 
+    def test_old_qwen_text_model_is_upgraded_to_reference_model(self) -> None:
+        module = load_design_visuals_module()
+        with patch.dict(
+            os.environ,
+            {"DASHSCOPE_API_KEY": "test-key", "IMAGE_PROVIDER": "dashscope", "IMAGE_MODEL": "qwen-image"},
+            clear=False,
+        ):
+            config = module.get_image_api_config()
+
+        self.assertEqual(config["model"], "qwen-image-2.0-pro")
+        self.assertTrue(config["force_reference_model"])
+
+    def test_exploded_prompt_requires_single_vertical_technical_stack(self) -> None:
+        module = load_design_visuals_module()
+        req_df = pd.DataFrame(
+            [{"需求主题": "定时提醒", "需求描述": "老人容易忘记吃药", "来源关键词": "提醒、分格、便携"}]
+        )
+        struct_df = pd.DataFrame(
+            [
+                {"结构名称": "透明翻盖", "结构描述": "保护药仓"},
+                {"结构名称": "七日分格药仓", "结构描述": "分类收纳药片"},
+                {"结构名称": "提醒电路板", "结构描述": "控制提醒和显示"},
+            ]
+        )
+
+        prompt_lines = module.extract_prompt_lines(module.build_image_prompts("智能药盒", req_df, struct_df))
+        exploded_prompt = prompt_lines[1]
+
+        self.assertIn("单张完整爆炸图", exploded_prompt)
+        self.assertIn("沿中心垂直装配轴", exploded_prompt)
+        self.assertIn("从上到下分层悬浮", exploded_prompt)
+        self.assertIn("不得生成多宫格", exploded_prompt)
+        self.assertIn("不得生成耳机", exploded_prompt)
+
     def test_board_notes_are_compact_design_description_not_topic_dump(self) -> None:
         module = load_design_visuals_module()
         req_df = pd.DataFrame(
@@ -156,6 +191,42 @@ class DesignVisualConsistencyTests(unittest.TestCase):
                 board_size = board.size
 
         self.assertEqual(board_size, (1600, 2200))
+
+    def test_board_template_removes_color_analysis_without_blank_area(self) -> None:
+        module = load_design_visuals_module()
+        labels = module.board_section_labels()
+
+        self.assertNotIn("色彩分析", "".join(labels))
+        self.assertNotIn("Color analysis", "".join(labels))
+        self.assertIn("结构工艺", "".join(labels))
+        self.assertIn("材质分析", "".join(labels))
+
+    def test_engineering_exploded_schematic_is_generated_locally(self) -> None:
+        module = load_design_visuals_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "exploded.png"
+            struct_df = pd.DataFrame(
+                [
+                    {"结构名称": "透明翻盖", "结构描述": "保护药仓"},
+                    {"结构名称": "七日分格药仓", "结构描述": "分类收纳药片"},
+                    {"结构名称": "提醒电路板", "结构描述": "控制提醒和显示"},
+                ]
+            )
+            module.create_exploded_schematic(output_path, "智能药盒", struct_df)
+            with Image.open(output_path) as image:
+                image_size = image.size
+
+        self.assertEqual(image_size, (1200, 1600))
+
+    def test_product_identity_reference_blocks_unrelated_objects(self) -> None:
+        module = load_design_visuals_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "identity.png"
+            module.create_product_identity_reference_image(output_path, "智能药盒")
+            with Image.open(output_path) as image:
+                image_size = image.size
+
+        self.assertEqual(image_size, (1024, 1024))
 
     def test_dashscope_multimodal_reference_request_uses_reference_image(self) -> None:
         module = load_design_visuals_module()
