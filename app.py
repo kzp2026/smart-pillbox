@@ -1,313 +1,26 @@
 from __future__ import annotations
 
-import subprocess
-import sys
+import importlib.util
 import os
-import hashlib
-import json
-import re
+import sys
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
-from scripts.graph_visualization import build_graph_html
-from scripts.result_archive import build_result_archive, extract_result_archive, find_restored_input_file
+from scripts.common import build_cleaned_dataframe, detect_comment_column, read_table
+from scripts.product_knowledge_base import (
+    DEFAULT_DB_PATH,
+    ProductKnowledgeBase,
+    generate_design_package,
+    normalize_database_url,
+)
 
-
-# =========================
-# 1. 基础配置
-# =========================
 
 ROOT_DIR = Path(__file__).resolve().parent
-OUTPUT_ROOT = ROOT_DIR / "output" / "runs"
-SCRIPTS_DIR = ROOT_DIR / "scripts"
-OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-
-# 阶段定义（去掉产品名称，改为动态）
-STAGES = [
-    ("01 评论清洗", "01_clean_comments.py", "cleaned_comments.xlsx"),
-    ("02 关键词提取", "02_extract_keywords.py", "需求关键词提取结果.xlsx"),
-    ("03 情感分析", "03_sentiment_analysis.py", "情感分析结果.xlsx"),
-    ("04 主题聚类", "04_bertopic_clustering.py", "BERTopic主题聚类结果.xlsx"),
-    ("05 需求映射", "05_build_mapping_database.py", "{product}_需求功能映射数据库.xlsx"),
-    ("06 Neo4j图谱", "06_build_neo4j_files.py", "neo4j_nodes.csv"),
-    ("07 AI生成参数", "07_generate_ai_parameters.py", "AI生成参数表.xlsx"),
-    ("08 设计方案", "07_generate_design_scheme.py", "{product}产品设计方案.docx"),
-    ("09 设计图片", "08_generate_design_visuals.py", "design_images/{product}产品设计展板.png"),
-    ("10 方案评价", "09_evaluate_design_scheme.py", "方案评价表.xlsx"),
-]
-
-AI_PARAMETER_STAGES = [STAGES[index] for index in (0, 1, 2, 3, 4, 5, 6)]
-DESIGN_IMAGE_STAGES = [STAGES[index] for index in (0, 1, 2, 3, 4, 6, 7, 8)]
-EVALUATION_STAGES = [STAGES[index] for index in (0, 1, 2, 3, 4, 5, 6, 7, 9)]
-
-
-def get_product_name() -> str:
-    """获取当前产品名称"""
-    return str(st.session_state.get("product_name", "")).strip()
-
-
-def safe_path_part(value: str) -> str:
-    """把产品名称转换为安全的目录名，同时保留可读性。"""
-    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value)).strip(" ._")
-    return cleaned[:40] or "未命名产品"
-
-
-def get_output_dir() -> Path:
-    """返回当前上传数据对应的独立输出目录。"""
-    active = st.session_state.get("active_output_dir")
-    if active:
-        return Path(active)
-    return OUTPUT_ROOT / "_waiting_for_upload"
-
-
-def has_active_dataset() -> bool:
-    """判断当前会话是否已经上传并绑定评论数据。"""
-    return bool(st.session_state.get("active_dataset_key"))
-
-
-def output_filename(stage_output: str) -> str:
-    """把阶段输出文件名中的 {product} 替换为实际产品名"""
-    return stage_output.replace("{product}", get_product_name())
-
-
-def resolve_output_path(relative_path: str) -> Path:
-    """返回某个输出文件的最新可用路径。
-
-    当 Excel/WPS 占用标准结果文件时，脚本会写入“文件名_时间戳.xlsx”；
-    页面展示时自动选择最新文件，避免旧文件占用导致流程中断。
-    """
-    resolved = get_output_dir() / output_filename(relative_path)
-    candidates = []
-    if resolved.exists():
-        candidates.append(resolved)
-    candidates.extend(resolved.parent.glob(f"{resolved.stem}_*{resolved.suffix}"))
-    if candidates:
-        return max(candidates, key=lambda path: path.stat().st_mtime)
-    return resolved
-
-
-def get_download_files() -> list[str]:
-    """动态生成下载文件列表"""
-    p = get_product_name()
-    return [
-        "cleaned_comments.xlsx",
-        "需求关键词提取结果.xlsx",
-        "情感分析结果.xlsx",
-        "BERTopic主题聚类结果.xlsx",
-        f"{p}_需求功能映射数据库.xlsx",
-        "neo4j_nodes.csv",
-        "neo4j_relationships.csv",
-        "import_neo4j.cypher",
-        "需求—功能—结构映射表.xlsx",
-        "AI生成参数表.xlsx",
-        "ai_generation_parameters.json",
-        "prompt_template.txt",
-        f"{p}产品设计方案.docx",
-        f"{p}产品设计方案.txt",
-        f"design_images/{p}产品效果图.png",
-        f"design_images/{p}爆炸图.png",
-        f"design_images/{p}细节图.png",
-        f"design_images/{p}产品三视图.png",
-        f"design_images/{p}产品设计展板.png",
-        f"design_images/{p}产品使用效果图.png",
-        "design_images/产品身份参考图.png",
-        "design_images/设计图像生成提示词.txt",
-        "design_images/产品一致性设计锁.txt",
-        "design_images/设计图片PM验收表.xlsx",
-        "design_images/设计图像清单.xlsx",
-        "design_images/写实渲染状态.json",
-        "方案评价表.xlsx",
-        "方案评价结果.json",
-        "方案优化建议.txt",
-        "优化后AI生成参数.json",
-        "开题报告实验结果摘要.docx",
-    ]
-
-
-# =========================
-# 2. 文件读取与运行工具
-# =========================
-
-def save_uploaded_file(uploaded_file) -> Path | None:
-    if uploaded_file is None:
-        existing_input = st.session_state.get("active_input_path")
-        if existing_input and Path(existing_input).exists():
-            return Path(existing_input)
-        if st.session_state.get("active_dataset_key") and st.session_state.get("active_output_dir"):
-            return None
-        st.session_state.pop("active_dataset_key", None)
-        st.session_state.pop("active_output_dir", None)
-        st.session_state.pop("active_input_path", None)
-        return None
-
-    file_bytes = uploaded_file.getvalue()
-    digest = hashlib.sha256(file_bytes).hexdigest()
-    dataset_key = f"{safe_path_part(get_product_name())}_{digest[:16]}"
-    run_dir = OUTPUT_ROOT / dataset_key
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    suffix = Path(uploaded_file.name).suffix.lower()
-    target = run_dir / f"uploaded_comments{suffix}"
-    if not target.exists() or target.read_bytes() != file_bytes:
-        target.write_bytes(file_bytes)
-
-    previous_key = st.session_state.get("active_dataset_key")
-    st.session_state["active_dataset_key"] = dataset_key
-    st.session_state["active_output_dir"] = str(run_dir)
-    st.session_state["active_input_path"] = str(target)
-    if previous_key != dataset_key:
-        st.cache_data.clear()
-    return target
-
-
-def run_stage(script_name: str, input_path: Path | None = None) -> subprocess.CompletedProcess:
-    command = [
-        sys.executable,
-        str(SCRIPTS_DIR / script_name),
-        "--output-dir", str(get_output_dir()),
-    ]
-    if script_name in {
-        "05_build_mapping_database.py",
-        "06_build_neo4j_files.py",
-        "07_generate_ai_parameters.py",
-        "07_generate_design_scheme.py",
-        "08_generate_design_visuals.py",
-        "09_evaluate_design_scheme.py",
-    }:
-        command.extend(["--product-name", get_product_name()])
-    if input_path and script_name in {
-        "01_clean_comments.py", "02_extract_keywords.py",
-        "03_sentiment_analysis.py", "04_bertopic_clustering.py",
-    }:
-        command.extend(["--input", str(input_path)])
-    env = os.environ.copy()
-    runtime_dashscope_key = str(st.session_state.get("runtime_dashscope_api_key", "")).strip()
-    if runtime_dashscope_key:
-        env["DASHSCOPE_API_KEY"] = runtime_dashscope_key
-        env["IMAGE_PROVIDER"] = "dashscope"
-        env["IMAGE_MODEL"] = normalize_runtime_image_model()
-    return subprocess.run(command, cwd=ROOT_DIR, capture_output=True, text=True, env=env)
-
-
-@st.cache_data(show_spinner=False)
-def read_excel_cached(path: str, sheet_name: str | None, modified_ns: int, file_size: int):
-    if sheet_name is None:
-        # sheet_name=None 在 pandas 中表示读取全部工作表，会返回 dict；
-        # 页面预览需要 DataFrame，因此默认读取第一个工作表。
-        return pd.read_excel(path, sheet_name=0)
-    return pd.read_excel(path, sheet_name=sheet_name)
-
-
-@st.cache_data(show_spinner=False)
-def read_csv_cached(path: str, modified_ns: int, file_size: int) -> pd.DataFrame:
-    return pd.read_csv(path)
-
-
-def load_sheet(filename: str, sheet_name: str | None) -> pd.DataFrame:
-    path = resolve_output_path(filename)
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        stat = path.stat()
-        data = read_excel_cached(str(path), sheet_name, stat.st_mtime_ns, stat.st_size)
-        # 兜底处理：如果后续误传 sheet_name=None 或文件读取返回字典，
-        # 自动取第一个工作表，避免 show_table 访问 .empty 时崩溃。
-        if isinstance(data, dict):
-            return next(iter(data.values()), pd.DataFrame())
-        if isinstance(data, pd.DataFrame):
-            return data
-        return pd.DataFrame(data)
-    except Exception:
-        return pd.DataFrame()
-
-
-def file_ready(relative_path: str) -> bool:
-    return has_active_dataset() and resolve_output_path(relative_path).exists()
-
-
-def show_table(df: pd.DataFrame, title: str, max_rows: int = 100) -> None:
-    st.subheader(title)
-    if df.empty:
-        st.info("该结果尚未生成，请先运行对应阶段。")
-        return
-    st.dataframe(df.head(max_rows), use_container_width=True)
-
-
-def show_downloads() -> None:
-    st.header("📥 下载中心")
-    found = False
-    output_dir = get_output_dir()
-    if has_active_dataset() and output_dir.exists():
-        archive_bytes = build_result_archive(output_dir, get_product_name())
-        st.download_button(
-            label="⬇ 下载完整研究结果归档.zip",
-            data=archive_bytes,
-            file_name=f"{safe_path_part(get_product_name())}_完整研究结果归档.zip",
-            mime="application/zip",
-            use_container_width=True,
-        )
-        st.caption("该 ZIP 可在侧边栏“恢复历史结果归档”重新导入，解决 Streamlit Cloud 重启后结果丢失的问题。")
-    for rel_path in get_download_files():
-        full = resolve_output_path(rel_path)
-        if full.exists():
-            found = True
-            with open(full, "rb") as f:
-                st.download_button(
-                    label=f"⬇ {rel_path}",
-                    data=f,
-                    file_name=Path(rel_path).name,
-                    mime="application/octet-stream",
-                )
-    if not found:
-        st.info("还没有生成结果，请先上传数据并运行分析。")
-
-
-def render_design_image_card(rel_path: str, title: str, description: str) -> None:
-    full = resolve_output_path(rel_path)
-    st.subheader(title)
-    st.caption(description)
-    if full.exists():
-        st.image(str(full), use_container_width=True)
-        st.download_button(
-            label=f"下载{title}",
-            data=full.read_bytes(),
-            file_name=full.name,
-            mime="image/png",
-            key=f"download_{rel_path}",
-            use_container_width=True,
-        )
-    else:
-        st.info(f"{title}尚未生成，请先运行“09 设计图片”。")
-
-
-def load_render_status() -> dict:
-    status_path = resolve_output_path("design_images/写实渲染状态.json")
-    if not status_path.exists():
-        return {}
-    try:
-        return json.loads(status_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def get_image_api_status() -> tuple[bool, str, str]:
-    runtime_dashscope_key = str(st.session_state.get("runtime_dashscope_api_key", "")).strip()
-    if runtime_dashscope_key:
-        return True, "阿里云百炼 DashScope（当前会话临时密钥）", normalize_runtime_image_model()
-    dashscope_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_IMAGE_API_KEY")
-    image_key = os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
-    provider = os.getenv("IMAGE_PROVIDER", "").strip().lower()
-    if provider in {"dashscope", "aliyun", "alibaba", "qwen", "qwen-image", "wanx"} or (dashscope_key and provider not in {"openai", "compatible", "openai-compatible"}):
-        configured_model = os.getenv("IMAGE_MODEL", DEFAULT_IMAGE_MODEL)
-        if configured_model.strip().lower() == "qwen-image":
-            configured_model = f"{DEFAULT_IMAGE_MODEL}（已自动升级）"
-        return bool(dashscope_key), "阿里云百炼 DashScope（通义万相 / Qwen-Image）", configured_model
-    return bool(image_key), "OpenAI Images 兼容接口", os.getenv("IMAGE_MODEL", "gpt-image-1")
-
-
+OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
+LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
@@ -318,479 +31,464 @@ IMAGE_MODEL_OPTIONS = [
 ]
 
 
-def normalize_runtime_image_model() -> str:
-    model = str(st.session_state.get("runtime_image_model", DEFAULT_IMAGE_MODEL)).strip()
-    if model not in IMAGE_MODEL_OPTIONS:
-        model = DEFAULT_IMAGE_MODEL
-        st.session_state["runtime_image_model"] = model
-    return model
-
-
-def load_json_output(relative_path: str) -> dict:
-    path = resolve_output_path(relative_path)
-    if not path.exists():
-        return {}
+def get_secret(name: str, default: str = "") -> str:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+        value = st.secrets.get(name, default)
+    except Exception:
+        value = os.getenv(name, default)
+    return str(value or "").strip()
 
 
-def load_text_output(relative_path: str) -> str:
-    path = resolve_output_path(relative_path)
-    if not path.exists():
-        return ""
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
+def get_database_url() -> str:
+    return get_secret("PRODUCT_KB_DATABASE_URL") or get_secret("DATABASE_URL") or normalize_database_url()
 
 
-def run_stage_sequence(
-    stages: list[tuple[str, str, str]],
-    input_path: Path | None,
-    final_stage_name: str,
-    running_label: str,
-    done_label: str,
-) -> bool:
-    with st.status(running_label, expanded=True) as status:
-        for stage_name, script_name, stage_output in stages:
-            if stage_name != final_stage_name and file_ready(stage_output):
-                st.write(f"✅ {stage_name} 已有结果，跳过")
-                continue
-            st.write(f"⏳ {stage_name}...")
-            result = run_stage(script_name, input_path)
-            if result.returncode != 0:
-                error_text = (result.stderr or result.stdout or "未知错误").strip()
-                st.error(f"❌ {stage_name} 失败：{error_text[:800]}")
-                status.update(label=f"{stage_name} 失败", state="error")
-                return False
-            st.write(f"✅ {stage_name} 完成")
-        status.update(label=done_label, state="complete")
-        return True
+@st.cache_resource(show_spinner=False)
+def get_kb(database_url: str, owner_id: str) -> ProductKnowledgeBase:
+    kb = ProductKnowledgeBase(database_url=database_url, owner_id=owner_id)
+    kb.initialize()
+    return kb
 
 
-# =========================
-# 3. 页面 UI
-# =========================
+def load_uploaded_comments(uploaded_file) -> tuple[list[str], str]:
+    suffix = Path(uploaded_file.name).suffix.lower()
+    temp_dir = OUTPUT_DIR / "_uploads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_dir / f"uploaded_comments{suffix}"
+    temp_path.write_bytes(uploaded_file.getvalue())
+    df = read_table(temp_path)
+    comment_col = detect_comment_column(df)
+    comments = df[comment_col].dropna().astype(str).tolist()
+    return comments, str(comment_col)
 
-st.set_page_config(page_title="用户评论驱动的产品创新智能体", page_icon="📊", layout="wide")
 
-# --- 侧边栏 ---
-with st.sidebar:
-    st.title("⚙️ 控制面板")
+def derive_requirements_from_comments(product_id: int, batch_id: int, comments: list[str], kb: ProductKnowledgeBase) -> int:
+    keyword_rules = {
+        "提醒反馈": ["提醒", "提示", "声音", "灯", "通知", "忘记", "按时"],
+        "安全可靠": ["安全", "稳定", "牢固", "防滑", "可靠", "保护"],
+        "操作便利": ["方便", "简单", "容易", "操作", "老人", "父母", "清楚"],
+        "容量收纳": ["容量", "收纳", "分格", "分类", "空间", "够用"],
+        "外观质感": ["外观", "颜色", "好看", "质感", "材质", "做工"],
+        "价格服务": ["价格", "客服", "物流", "安装", "售后", "性价比"],
+    }
+    added = 0
+    joined = "\n".join(comments)
+    for title, keywords in keyword_rules.items():
+        evidence = [comment for comment in comments if any(keyword in comment for keyword in keywords)][:3]
+        if not evidence:
+            continue
+        score = min(100, 55 + len(evidence) * 12)
+        kb.add_requirement(
+            product_id=product_id,
+            batch_id=batch_id,
+            title=title,
+            description=f"历史评论多次提到{title}相关体验，需要在方案中优先回应。",
+            keywords=keywords,
+            evidence_text=" | ".join(evidence),
+            score=score,
+        )
+        added += 1
+    if added == 0 and comments:
+        kb.add_requirement(
+            product_id=product_id,
+            batch_id=batch_id,
+            title="综合体验优化",
+            description="评论暂未命中明确规则，先作为综合体验证据沉淀。",
+            keywords="体验、产品、使用",
+            evidence_text=joined[:300],
+            score=60,
+        )
+        added = 1
+    return added
 
-    # 产品名称输入
-    st.text_input(
-        "📦 产品名称",
-        value=st.session_state.get("product_name", ""),
-        placeholder="例如：智能药盒、蓝牙耳机、咖啡机...",
-        key="product_name",
-        help="输入你要研究的产品名称，所有结果将围绕该产品生成。",
+
+def load_design_visuals_module():
+    module_path = ROOT_DIR / "scripts" / "08_generate_design_visuals.py"
+    spec = importlib.util.spec_from_file_location("design_visuals_for_kb_app", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    sys.path.insert(0, str(ROOT_DIR / "scripts"))
+    spec.loader.exec_module(module)
+    return module
+
+
+def build_dashscope_config(api_key: str, model: str) -> dict:
+    module = load_design_visuals_module()
+    return {
+        "provider": "dashscope",
+        "api_key": api_key,
+        "base_url": os.getenv("DASHSCOPE_IMAGE_API_URL", "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"),
+        "multimodal_url": os.getenv("DASHSCOPE_MULTIMODAL_API_URL", "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"),
+        "task_url": os.getenv("DASHSCOPE_TASK_API_URL", "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"),
+        "model": DEFAULT_IMAGE_MODEL if model == "qwen-image" else model,
+        "quality": "standard",
+        "custom_base_url": bool(os.getenv("DASHSCOPE_IMAGE_API_URL")),
+        "force_reference_model": model == "qwen-image",
+        "prompt_extend": False,
+        "negative_prompt": module.get_image_api_config().get("negative_prompt", ""),
+        "seed": "",
+    }
+
+
+def generate_dashscope_render(prompt: str, target_product: str, api_key: str, model: str) -> Path | None:
+    if not api_key:
+        return None
+    module = load_design_visuals_module()
+    safe_name = "".join(char if char.isalnum() or "\u4e00" <= char <= "\u9fff" else "_" for char in target_product)[:40] or "product"
+    image_dir = OUTPUT_DIR / "dashscope_images"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    output_path = image_dir / f"{safe_name}_写实效果图.png"
+    ok = module.generate_ai_image(
+        prompt,
+        output_path,
+        size="1024x1024",
+        reference_path=None,
+        config=build_dashscope_config(api_key, model),
     )
+    return output_path if ok and output_path.exists() else None
 
-    if not get_product_name():
-        st.warning("👆 请先输入产品名称")
-        st.stop()
 
-    st.divider()
-
-    # 数据上传
-    uploaded = st.file_uploader(
-        "📤 上传评论数据",
-        type=["xlsx", "xls", "csv"],
-        help="支持 .xlsx / .xls / .csv，自动识别评论列。",
-    )
-    input_path = save_uploaded_file(uploaded)
-    if uploaded is not None:
-        st.success(f"已绑定当前数据：{uploaded.name}")
-        st.caption(f"独立结果编号：{st.session_state['active_dataset_key'][-16:]}")
+def render_quality_report(package: dict) -> None:
+    score = int(package["quality_score"])
+    status = package["quality_status"]
+    st.metric("合理性评分", f"{score}/100", status)
+    report = package["quality_report"]
+    checks_df = pd.DataFrame({"检查项": report["checks"]})
+    st.dataframe(checks_df, use_container_width=True, hide_index=True)
+    if report["warnings"]:
+        for warning in report["warnings"]:
+            st.warning(warning)
     else:
-        st.info("请上传评论数据。上传前不会显示仓库内的历史结果。")
+        st.success("证据链、需求转译、输出完整性达到当前质量门槛。")
 
-    with st.expander("🎨 写实渲染配置（可选）", expanded=False):
-        st.caption("如果你看不到 Streamlit 后台 Secrets，就在这里临时填写百炼 Key。仅当前会话使用，不写入 GitHub。")
-        st.text_input(
-            "阿里云百炼 API Key",
-            type="password",
-            key="runtime_dashscope_api_key",
-            placeholder="sk-...",
-            help="不要把密钥发给别人；这里只用于当前网页会话生成写实渲染图。",
-        )
-        normalize_runtime_image_model()
-        st.selectbox(
-            "图片模型",
-            options=IMAGE_MODEL_OPTIONS,
-            index=0,
-            key="runtime_image_model",
-            help="优先使用最新 qwen-image-2.0-pro 快照；qwen-image-max 更写实但参考图一致性弱一些。",
-        )
-        st.caption("百炼生图通常按成功生成图片计费，不一定要订套餐；但账号需要有免费额度、余额或对应模型调用权限。")
-        if st.session_state.get("runtime_dashscope_api_key"):
-            st.success("已填写临时百炼密钥。进入“设计图片”页点击写实渲染生成按钮。")
 
-    with st.expander("📦 恢复历史结果归档", expanded=False):
-        archive_file = st.file_uploader(
-            "上传此前下载的完整研究结果归档.zip",
-            type=["zip"],
-            key="restore_result_archive",
-            help="用于恢复已生成的表格、图片、方案和评价结果，解决云端重启后结果丢失。",
+def load_legacy_sheet(filename: str, sheet_name: str | None = None) -> pd.DataFrame:
+    path = LEGACY_OUTPUT_DIR / filename
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_excel(path, sheet_name=sheet_name or 0)
+    except Exception:
+        return pd.DataFrame()
+
+
+def load_legacy_csv(filename: str) -> pd.DataFrame:
+    path = LEGACY_OUTPUT_DIR / filename
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def show_table(df: pd.DataFrame, title: str, max_rows: int = 80) -> None:
+    st.subheader(title)
+    if df.empty:
+        st.info("该结果尚未生成。可在左侧页面导航打开“01_现有流程备份”运行完整流程。")
+        return
+    st.dataframe(df.head(max_rows), use_container_width=True)
+
+
+def show_legacy_file_download(relative_path: str) -> None:
+    path = LEGACY_OUTPUT_DIR / relative_path
+    if path.exists() and path.is_file():
+        st.download_button(
+            f"下载 {Path(relative_path).name}",
+            data=path.read_bytes(),
+            file_name=path.name,
+            mime="application/octet-stream",
+            use_container_width=True,
         )
-        if st.button("恢复归档", use_container_width=True, disabled=archive_file is None):
-            try:
-                archive_bytes = archive_file.getvalue()
-                restored_dir = extract_result_archive(archive_bytes, OUTPUT_ROOT, get_product_name())
-                restored_input = find_restored_input_file(restored_dir)
-                st.session_state["active_dataset_key"] = restored_dir.name
-                st.session_state["active_output_dir"] = str(restored_dir)
-                if restored_input:
-                    st.session_state["active_input_path"] = str(restored_input)
-                else:
-                    st.session_state.pop("active_input_path", None)
-                st.cache_data.clear()
-                st.success("历史结果已恢复。")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"归档恢复失败：{exc}")
+
+
+st.set_page_config(page_title="产品评论知识库智能体", page_icon="🧠", layout="wide")
+
+with st.sidebar:
+    st.title("🧠 知识库控制台")
+    owner_id = st.text_input("私人库 ID", value="private", help="当前先给你个人使用；后期共享时可扩展为登录用户 ID。")
+    database_url = get_database_url()
+    if database_url.startswith("sqlite"):
+        st.info(f"当前使用本地 SQLite：{DEFAULT_DB_PATH.name}")
+    else:
+        st.success("当前使用云数据库 PostgreSQL/Supabase。")
+
+    with st.expander("☁️ Supabase/PostgreSQL 配置", expanded=False):
+        st.caption("在 Streamlit Secrets 中配置 PRODUCT_KB_DATABASE_URL 或 DATABASE_URL。没有配置时自动使用本地 SQLite。")
+        st.code('PRODUCT_KB_DATABASE_URL = "postgresql://user:password@host:5432/postgres"', language="toml")
 
     st.divider()
-
-    # 一键生成
-    if st.button("🚀 一键生成全部研究结果", type="primary", use_container_width=True):
-        if input_path is None:
-            st.error("请先上传评论数据。")
-            st.stop()
-        with st.status(f"正在分析 {get_product_name()} 用户评论...", expanded=True) as status:
-            for stage_name, script_name, _ in STAGES:
-                st.write(f"⏳ {stage_name}...")
-                result = run_stage(script_name, input_path)
-                if result.returncode != 0:
-                    st.error(f"❌ {stage_name} 失败：{result.stderr[:500]}")
-                    status.update(label=f"{stage_name} 失败", state="error")
-                    break
-                st.write(f"✅ {stage_name} 完成")
-            else:
-                status.update(label="🎉 全部完成！", state="complete")
-        st.cache_data.clear()
-        st.rerun()
-
-    st.divider()
-
-    # 分阶段运行
-    st.subheader("🔧 分阶段运行")
-    for stage_name, script_name, _ in STAGES:
-        if st.button(f"▶ {stage_name}", use_container_width=True):
-            if input_path is None:
-                st.error("请先上传评论数据。")
-                st.stop()
-            with st.spinner(f"运行 {stage_name}..."):
-                result = run_stage(script_name, input_path)
-                if result.returncode == 0:
-                    st.success(f"✅ {stage_name} 完成")
-                else:
-                    st.error(f"❌ {stage_name}：{result.stderr[:300]}")
-            st.cache_data.clear()
-            st.rerun()
+    st.subheader("🎨 阿里云写实渲染")
+    runtime_dashscope_key = st.text_input(
+        "阿里云百炼 API Key",
+        type="password",
+        value="",
+        placeholder="sk-...",
+        help="仅当前会话使用，不写入代码。也可在 Secrets 配置 DASHSCOPE_API_KEY。",
+    )
+    image_model = st.selectbox("图片模型", IMAGE_MODEL_OPTIONS, index=0)
+    configured_dashscope_key = runtime_dashscope_key or get_secret("DASHSCOPE_API_KEY") or get_secret("QWEN_IMAGE_API_KEY")
+    if configured_dashscope_key:
+        st.success(f"写实渲染入口已启用：DashScope / {image_model}")
+    else:
+        st.caption("未填写 Key 时只生成可复制的写实渲染提示词。")
 
 
-# --- 主区域 ---
-p = get_product_name()
-deepseek_configured = bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("LLM_API_KEY"))
-image_api_configured, image_provider_label, image_model_name = get_image_api_status()
-st.title(f"📊 {p} — 用户评论驱动的产品创新智能体")
-st.caption("上传任意产品评论数据 → 自动完成 NLP 分析 → 生成产品设计方案与设计图")
+kb = get_kb(database_url, owner_id)
 
-if not has_active_dataset():
-    st.info("请在左侧填写产品名称并上传评论数据。当前页面不会读取或展示任何历史产品结果。")
+st.title("产品评论知识库智能体")
+st.caption("把导入过的评论长期沉淀为私人产品设计数据库；后续只输入产品需求，就能检索历史证据并生成方案与写实渲染提示词。")
 
-# 标签页
-tabs = st.tabs([
-    "📋 评论清洗", "🔑 关键词提取", "💬 情感分析", "🧩 主题聚类",
-    "🗺 需求映射", "🕸 Neo4j图谱", "🤖 AI 生成参数", "📝 设计方案",
-    "🎨 设计图片", "📊 方案评价", "📥 下载中心",
+(
+    tab_import,
+    tab_generate,
+    tab_library,
+    tab_clean,
+    tab_keywords,
+    tab_sentiment,
+    tab_topics,
+    tab_mapping,
+    tab_neo4j,
+    tab_ai_params,
+    tab_scheme,
+    tab_images,
+    tab_evaluation,
+    tab_downloads,
+    tab_legacy,
+) = st.tabs([
+    "导入评论资产",
+    "需求生成",
+    "知识库概览",
+    "📋 评论清洗",
+    "🔑 关键词提取",
+    "💬 情感分析",
+    "🧩 主题聚类",
+    "🗺 需求映射",
+    "🕸 Neo4j图谱",
+    "🤖 AI生成参数",
+    "📝 设计方案",
+    "🎨 设计图片",
+    "📊 方案评价",
+    "📥 下载中心",
+    "旧版入口",
 ])
 
-with tabs[0]:
+with tab_import:
+    st.header("导入评论资产")
+    col_left, col_right = st.columns([0.38, 0.62])
+    with col_left:
+        product_name = st.text_input("产品名称", placeholder="例如：智能药盒、保温杯、蓝牙耳机")
+        category = st.text_input("产品品类", placeholder="例如：适老健康、厨房电器、可穿戴设备")
+        uploaded = st.file_uploader("上传评论数据", type=["xlsx", "xls", "csv"])
+        import_clicked = st.button("存入知识库", type="primary", use_container_width=True, disabled=uploaded is None or not product_name.strip())
+    with col_right:
+        st.info("导入后会保存原始评论，并自动抽取一批基础需求标签。后续生成新产品时，会从这些历史评论和需求证据中检索相关内容。")
+        if uploaded is not None:
+            try:
+                preview_comments, detected_col = load_uploaded_comments(uploaded)
+                st.caption(f"识别评论列：{detected_col}，共 {len(preview_comments)} 条")
+                st.dataframe(pd.DataFrame({"评论预览": preview_comments[:20]}), use_container_width=True, hide_index=True)
+            except Exception as exc:
+                st.error(f"读取上传文件失败：{exc}")
+                preview_comments = []
+        else:
+            preview_comments = []
+
+    if import_clicked:
+        if not preview_comments:
+            st.error("没有可导入的评论。")
+        else:
+            product_id, batch_id = kb.ingest_comment_batch(product_name, category, uploaded.name, preview_comments)
+            requirement_count = derive_requirements_from_comments(product_id, batch_id, preview_comments, kb)
+            st.success(f"已存入知识库：{len(preview_comments)} 条评论，自动生成 {requirement_count} 条基础需求证据。")
+            st.cache_resource.clear()
+            st.rerun()
+
+with tab_generate:
+    st.header("只输入需求，生成产品方案")
+    target_product = st.text_input("要生成的产品", placeholder="例如：适合老年人的智能水杯")
+    demand_text = st.text_area("需求描述", placeholder="例如：提醒喝水和吃药，字体要大，操作简单，适合父母日常使用。", height=120)
+    generate_clicked = st.button("从知识库生成方案", type="primary", use_container_width=True, disabled=not target_product.strip())
+
+    if generate_clicked:
+        query = f"{target_product} {demand_text}"
+        context = kb.search_context(query, limit=8)
+        package = generate_design_package(target_product, demand_text, context)
+        run_id = kb.save_generation_run(target_product, demand_text, context, package)
+        st.session_state["latest_generation"] = package
+        st.session_state["latest_context"] = context
+        st.session_state["latest_run_id"] = run_id
+
+    package = st.session_state.get("latest_generation")
+    context = st.session_state.get("latest_context")
+    if package:
+        left, right = st.columns([0.62, 0.38])
+        with left:
+            st.subheader("设计方案")
+            st.markdown(package["design_text"])
+            st.subheader("写实渲染提示词")
+            st.code(package["image_prompt_text"], language="text")
+        with right:
+            st.subheader("验证结果")
+            render_quality_report(package)
+            if context:
+                st.subheader("引用证据")
+                evidence_rows = []
+                for item in context.get("requirements", [])[:5]:
+                    evidence_rows.append({"类型": "需求", "来源产品": item.get("product_name", ""), "内容": item.get("title", ""), "证据": item.get("evidence_text", "")})
+                for item in context.get("comments", [])[:5]:
+                    evidence_rows.append({"类型": "评论", "来源产品": item.get("product_name", ""), "内容": item.get("comment_original", ""), "证据": ""})
+                st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
+
+            st.subheader("写实效果图")
+            if st.button("用阿里云百炼生成写实效果图", use_container_width=True, disabled=not configured_dashscope_key):
+                with st.spinner("正在调用 DashScope 生成写实效果图..."):
+                    image_path = generate_dashscope_render(package["image_prompt_text"], package["target_product"], configured_dashscope_key, image_model)
+                if image_path:
+                    st.image(str(image_path), use_container_width=True)
+                    st.download_button("下载写实效果图", data=image_path.read_bytes(), file_name=image_path.name, mime="image/png", use_container_width=True)
+                else:
+                    st.error("写实渲染失败，请检查百炼模型权限、余额、Key 或网络。提示词已保留，可复制到图像模型手动生成。")
+            elif not configured_dashscope_key:
+                st.caption("填写阿里云百炼 Key 后可在这里直接生成写实效果图。")
+
+with tab_library:
+    st.header("知识库概览")
+    products = kb.list_products()
+    if products:
+        st.dataframe(pd.DataFrame(products), use_container_width=True, hide_index=True)
+    else:
+        st.info("知识库还没有评论资产，请先导入至少一个产品的评论数据。")
+
+with tab_clean:
     st.header("评论数据清洗")
-    show_table(load_sheet("cleaned_comments.xlsx", None), "清洗后评论数据", 80)
+    st.caption("完整流程模块已保留。这里预览旧版流程生成的清洗结果；需要重新运行时请进入“旧版入口”。")
+    show_table(load_legacy_sheet("cleaned_comments.xlsx"), "清洗后评论数据", 80)
 
-with tabs[1]:
+with tab_keywords:
     st.header("TF-IDF 关键词提取")
-    show_table(load_sheet("需求关键词提取结果.xlsx", "关键词排名"), "关键词排名", 80)
-    show_table(load_sheet("需求关键词提取结果.xlsx", "评论关键词明细"), "评论关键词明细", 80)
-    show_table(load_sheet("需求关键词提取结果.xlsx", "关键词共现矩阵"), "关键词共现矩阵", 60)
+    show_table(load_legacy_sheet("需求关键词提取结果.xlsx", "关键词排名"), "关键词排名", 80)
+    show_table(load_legacy_sheet("需求关键词提取结果.xlsx", "评论关键词明细"), "评论关键词明细", 80)
+    show_table(load_legacy_sheet("需求关键词提取结果.xlsx", "关键词共现矩阵"), "关键词共现矩阵", 60)
 
-with tabs[2]:
+with tab_sentiment:
     st.header("用户痛点与中文情感分析")
-    show_table(load_sheet("情感分析结果.xlsx", "用户痛点"), "用户痛点", 50)
-    show_table(load_sheet("情感分析结果.xlsx", "用户满意点"), "用户满意点", 50)
-    show_table(load_sheet("情感分析结果.xlsx", "关键词情感统计"), "关键词情感统计", 80)
-    show_table(load_sheet("情感分析结果.xlsx", "评论情感明细"), "评论情感明细", 80)
+    show_table(load_legacy_sheet("情感分析结果.xlsx", "用户痛点"), "用户痛点", 50)
+    show_table(load_legacy_sheet("情感分析结果.xlsx", "用户满意点"), "用户满意点", 50)
+    show_table(load_legacy_sheet("情感分析结果.xlsx", "关键词情感统计"), "关键词情感统计", 80)
+    show_table(load_legacy_sheet("情感分析结果.xlsx", "评论情感明细"), "评论情感明细", 80)
 
-with tabs[3]:
+with tab_topics:
     st.header("评论主题聚类")
-    note_df = load_sheet("BERTopic主题聚类结果.xlsx", "算法说明")
-    if not note_df.empty:
-        st.info(str(note_df.iloc[0].to_dict()))
-    show_table(load_sheet("BERTopic主题聚类结果.xlsx", "主题汇总"), "主题汇总", 30)
-    show_table(load_sheet("BERTopic主题聚类结果.xlsx", "评论主题聚类结果"), "评论主题聚类明细", 80)
+    show_table(load_legacy_sheet("BERTopic主题聚类结果.xlsx", "主题汇总"), "主题汇总", 30)
+    show_table(load_legacy_sheet("BERTopic主题聚类结果.xlsx", "评论主题聚类结果"), "评论主题聚类明细", 80)
 
-with tabs[4]:
+with tab_mapping:
     st.header("用户需求 → 产品功能 → 产品结构 映射数据库")
-    mapping_fn = f"{p}_需求功能映射数据库.xlsx"
-    show_table(load_sheet(mapping_fn, "用户需求表"), "产品需求", 50)
-    show_table(load_sheet(mapping_fn, "设计机会点"), "设计机会点", 50)
-    show_table(load_sheet(mapping_fn, "产品功能表"), "产品功能", 50)
-    show_table(load_sheet(mapping_fn, "产品结构表"), "产品结构", 50)
-    show_table(load_sheet(mapping_fn, "需求功能映射"), "需求-功能映射", 80)
-    show_table(load_sheet(mapping_fn, "功能结构映射"), "功能-结构映射", 80)
+    mapping_files = sorted(LEGACY_OUTPUT_DIR.glob("*_需求功能映射数据库.xlsx"))
+    if not mapping_files:
+        st.info("需求映射数据库尚未生成。可在“旧版入口”运行完整流程。")
+    else:
+        mapping_file = mapping_files[-1].name
+        st.caption(f"当前预览：{mapping_file}")
+        show_table(load_legacy_sheet(mapping_file, "用户需求表"), "产品需求", 50)
+        show_table(load_legacy_sheet(mapping_file, "设计机会点"), "设计机会点", 50)
+        show_table(load_legacy_sheet(mapping_file, "产品功能表"), "产品功能", 50)
+        show_table(load_legacy_sheet(mapping_file, "产品结构表"), "产品结构", 50)
+        show_table(load_legacy_sheet(mapping_file, "需求功能映射"), "需求-功能映射", 80)
+        show_table(load_legacy_sheet(mapping_file, "功能结构映射"), "功能-结构映射", 80)
 
-with tabs[5]:
+with tab_neo4j:
     st.header("Neo4j 知识图谱数据")
-    nodes_path = resolve_output_path("neo4j_nodes.csv")
-    rels_path = resolve_output_path("neo4j_relationships.csv")
-    cypher_path = get_output_dir() / "import_neo4j.cypher"
-    nodes_df = pd.DataFrame()
-    rels_df = pd.DataFrame()
-    if nodes_path.exists():
-        stat = nodes_path.stat()
-        nodes_df = read_csv_cached(str(nodes_path), stat.st_mtime_ns, stat.st_size)
-    else:
-        st.info("节点表尚未生成。")
-    if rels_path.exists():
-        stat = rels_path.stat()
-        rels_df = read_csv_cached(str(rels_path), stat.st_mtime_ns, stat.st_size)
-    else:
-        st.info("关系表尚未生成。")
-    graph_html = build_graph_html(nodes_df, rels_df)
-    if graph_html:
-        components.html(graph_html, height=680, scrolling=True)
-    if not nodes_df.empty:
-        show_table(nodes_df, "知识图谱节点表", 100)
-    if not rels_df.empty:
-        show_table(rels_df, "知识图谱关系表", 100)
+    show_table(load_legacy_csv("neo4j_nodes.csv"), "知识图谱节点表", 100)
+    show_table(load_legacy_csv("neo4j_relationships.csv"), "知识图谱关系表", 100)
+    cypher_path = LEGACY_OUTPUT_DIR / "import_neo4j.cypher"
     if cypher_path.exists():
         st.subheader("Cypher 导入脚本")
         st.code(cypher_path.read_text(encoding="utf-8"), language="cypher")
 
-with tabs[6]:
+with tab_ai_params:
     st.header("AI 生成参数")
-    st.caption("用户评论数据 → 需求提取 → 知识图谱关系路径 → AI 生成参数 → Prompt 模板 → 设计方案生成 → 方案评价与优化。")
+    show_table(load_legacy_sheet("需求—功能—结构映射表.xlsx"), "需求—功能—结构映射表", 80)
+    show_table(load_legacy_sheet("AI生成参数表.xlsx"), "AI 生成参数表", 80)
+    for rel_path in ["ai_generation_parameters.json", "prompt_template.txt"]:
+        path = LEGACY_OUTPUT_DIR / rel_path
+        if path.exists():
+            with st.expander(f"查看 {rel_path}"):
+                st.code(path.read_text(encoding="utf-8"), language="json" if path.suffix == ".json" else "text")
 
-    if st.button(
-        "🤖 生成/刷新 AI 生成参数",
-        type="primary",
-        use_container_width=True,
-        disabled=input_path is None,
-        help="自动补跑缺失的分析阶段，并生成映射表、JSON 参数和 Prompt 模板。",
-    ):
-        if run_stage_sequence(
-            AI_PARAMETER_STAGES,
-            input_path,
-            "07 AI生成参数",
-            "正在把需求信息转化为 AI 可识别参数...",
-            "AI 生成参数已生成",
-        ):
-            st.cache_data.clear()
-
-    st.subheader("需求—功能—结构—AI 生成参数映射表")
-    st.caption("把用户需求主题、痛点证据和 Neo4j 关系路径进一步转化为功能、结构、材料、场景和 AI Prompt 参数。")
-    ai_mapping_df = load_sheet("需求—功能—结构映射表.xlsx", None)
-    if ai_mapping_df.empty:
-        st.info("AI 生成参数尚未生成，请点击上方按钮或运行“07 AI生成参数”。")
+with tab_scheme:
+    st.header("产品设计方案")
+    scheme_files = sorted(LEGACY_OUTPUT_DIR.glob("*产品设计方案.txt"))
+    if not scheme_files:
+        st.info("设计方案尚未生成。可在“旧版入口”运行完整流程。")
     else:
-        st.dataframe(ai_mapping_df, use_container_width=True)
+        scheme_file = scheme_files[-1]
+        st.caption(f"当前预览：{scheme_file.name}")
+        st.markdown(scheme_file.read_text(encoding="utf-8"))
 
-    ai_table_df = load_sheet("AI生成参数表.xlsx", None)
-    if not ai_table_df.empty and "原始评论证据" in ai_table_df.columns:
-        with st.expander("查看原始评论证据", expanded=False):
-            for _, row in ai_table_df.iterrows():
-                need = str(row.get("need", row.get("core_needs", row.get("需求主题", "需求主题"))))
-                evidence = str(row.get("原始评论证据", "")).strip()
-                with st.container(border=True):
-                    st.markdown(f"**{need}**")
-                    if evidence and evidence.lower() != "nan":
-                        for comment in [item.strip() for item in evidence.split("|") if item.strip()]:
-                            st.write(f"“{comment}”")
-                    else:
-                        st.caption("暂无代表性原始评论，请先完成主题聚类与情感分析。")
-
-    st.subheader("JSON 参数预览")
-    parameter_json = load_json_output("ai_generation_parameters.json")
-    if parameter_json:
-        st.json(parameter_json, expanded=False)
-    else:
-        st.info("JSON 参数尚未生成。")
-
-    st.subheader("Prompt 模板预览")
-    prompt_template = load_text_output("prompt_template.txt")
-    if prompt_template:
-        st.code(prompt_template, language="text")
-    else:
-        st.info("Prompt 模板尚未生成。")
-
-with tabs[7]:
-    st.header(f"{p} 产品设计方案")
-    if deepseek_configured:
-        st.success("DeepSeek 已连接：设计方案将根据当前评论分析结果进行增强。")
-    else:
-        st.info("未配置 DeepSeek API，当前使用离线规则生成设计方案。")
-    txt_path = resolve_output_path(f"{p}产品设计方案.txt")
-    if txt_path.exists():
-        st.markdown(txt_path.read_text(encoding="utf-8"))
-    else:
-        st.info("设计方案尚未生成。")
-
-with tabs[8]:
+with tab_images:
     st.header("设计图片")
-    st.caption("完整输出产品效果图、爆炸图、细节图、三视图、设计展板和产品使用效果图。")
-    if deepseek_configured:
-        st.success("DeepSeek 已连接：将依据需求、痛点和主题聚类优化工业设计渲染提示词。")
-
-    with st.expander("如何启用写实渲染", expanded=not image_api_configured):
-        st.markdown(
-            "在 Streamlit Cloud 打开 **Manage app → Settings → Secrets**，添加支持图片生成的 API 配置。"
-            "DeepSeek 只负责优化提示词，不能替代图片生成模型；国内模型可直接使用阿里云百炼 DashScope。"
-        )
-        st.info("如果公开页面右上角没有 Manage app，请直接在左侧“写实渲染配置（可选）”里临时填写阿里云百炼 API Key。")
-        st.caption("推荐国内配置：通义万相 / Qwen-Image")
-        st.code(
-            'DASHSCOPE_API_KEY = "你的阿里云百炼API Key"\n'
-            'IMAGE_PROVIDER = "dashscope"\n'
-            'IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"\n'
-            '# 可选：qwen-image-max 更偏写实；qwen-image-plus 成本更低；通义万相一致性弱于 Qwen-Image 参考链路。\n'
-            '# IMAGE_MODEL = "qwen-image-max"\n'
-            '# IMAGE_MODEL = "wan2.2-t2i-plus"\n'
-            '# 不建议使用旧 qwen-image，系统会自动升级为最新 qwen-image-2.0-pro。',
-            language="toml",
-        )
-        st.caption("OpenAI 或其他兼容接口配置：")
-        st.code(
-            'IMAGE_API_KEY = "你的图片模型密钥"\n'
-            'IMAGE_MODEL = "gpt-image-1"\n'
-            '# 使用兼容接口时再填写：\n'
-            '# IMAGE_BASE_URL = "https://你的接口地址/v1"\n'
-            '# IMAGE_QUALITY = "medium"',
-            language="toml",
-        )
-        st.caption("保存 Secrets 后等待应用重启，再点击下方按钮重新生成。密钥不要上传到 GitHub。")
-
-    if image_api_configured:
-        st.success(f"图片模型已配置：{image_provider_label} / {image_model_name}")
-
-    generate_label = f"🎨 使用{image_provider_label}生成/重新生成六类写实渲染图" if image_api_configured else "🧩 生成六类离线示意图"
-    if st.button(
-        generate_label,
-        type="primary",
-        use_container_width=True,
-        disabled=input_path is None,
-        help="自动补跑缺失的分析阶段，并重新执行 09 设计图片。",
-    ):
-        run_stage_sequence(
-            DESIGN_IMAGE_STAGES,
-            input_path,
-            "09 设计图片",
-            "正在准备设计数据并生成六类图片...",
-            "六类设计图片已生成",
-        )
-        st.cache_data.clear()
-
-    render_status = load_render_status()
-    if image_api_configured:
-        success_count = int(render_status.get("ai_success_count", 0))
-        target_count = int(render_status.get("ai_target_count", 5))
-        provider_name = render_status.get("provider") or image_provider_label
-        model_name = render_status.get("model") or image_model_name
-        engineering_exploded = bool(render_status.get("engineering_exploded"))
-        if render_status and success_count == target_count:
-            suffix = "，爆炸图已按工程拆解图生成" if engineering_exploded else ""
-            st.success(f"图片模型已连接：{provider_name} / {model_name}，本次 {success_count}/{target_count} 张写实图生成成功{suffix}，展板已自动合成。")
-        elif render_status:
-            suffix = "；爆炸图已按工程拆解图生成" if engineering_exploded else ""
-            st.warning(f"图片模型已配置，但本次仅 {success_count}/{target_count} 张写实图生成成功{suffix}；失败项目已自动回退为离线示意图。")
-            events = render_status.get("events") or []
-            failed_events = [event for event in events if event.get("status") == "failed"]
-            if failed_events:
-                with st.expander("查看图片生成失败原因"):
-                    for event in failed_events[-8:]:
-                        st.code(
-                            f"{event.get('image', '')} / {event.get('stage', '')}\n{event.get('message', '')}",
-                            language="text",
-                        )
-                    st.caption("如果提示模型无权限、余额不足、Quota 不足或欠费，需要在阿里云百炼控制台开通对应模型/充值；如果只是参考图失败，系统会自动改用同模型纯文本写实重试。")
-        else:
-            st.info("图片模型密钥已配置。点击上方按钮生成六类写实渲染图。")
+    st.caption("保留产品效果图、爆炸图、细节图、三视图、设计展板和产品使用效果图模块。")
+    image_dir = LEGACY_OUTPUT_DIR / "design_images"
+    image_files = sorted(image_dir.glob("*.png")) if image_dir.exists() else []
+    if not image_files:
+        st.info("设计图片尚未生成。也可以在“需求生成”页用阿里云百炼生成新版写实效果图。")
     else:
-        st.warning("当前未配置图片生成密钥，只能生成专业提示词和离线示意图；写实渲染需要 IMAGE_API_KEY、OPENAI_API_KEY、DASHSCOPE_API_KEY 或 QWEN_IMAGE_API_KEY。")
-
-    image_cards = [
-        (f"design_images/{p}产品效果图.png", "产品效果图", "展示整体造型、材质、配色与核心功能。"),
-        (f"design_images/{p}爆炸图.png", "产品爆炸图", "展示零部件、装配顺序与结构关系。"),
-        (f"design_images/{p}细节图.png", "产品细节图", "展示关键组件、交互区域与材料工艺。"),
-        (f"design_images/{p}产品三视图.png", "产品三视图", "展示正视图、侧视图和俯视图。"),
-        (f"design_images/{p}产品设计展板.png", "设计展板", "整合设计图、用户需求与研究结论。"),
-        (f"design_images/{p}产品使用效果图.png", "产品使用效果图", "展示目标用户、使用动作与真实环境。"),
-    ]
-    for start in range(0, len(image_cards), 3):
         columns = st.columns(3)
-        for column, card in zip(columns, image_cards[start:start + 3]):
-            with column:
-                with st.container(border=True):
-                    render_design_image_card(*card)
+        for index, image_path in enumerate(image_files):
+            with columns[index % 3]:
+                st.image(str(image_path), caption=image_path.name, use_container_width=True)
+                st.download_button(
+                    f"下载 {image_path.name}",
+                    data=image_path.read_bytes(),
+                    file_name=image_path.name,
+                    mime="image/png",
+                    use_container_width=True,
+                )
 
-    prompt_path = resolve_output_path("design_images/设计图像生成提示词.txt")
-    if prompt_path.exists():
-        with st.expander("查看可复制到图像模型的提示词"):
-            st.code(prompt_path.read_text(encoding="utf-8"))
-    consistency_lock_path = resolve_output_path("design_images/产品一致性设计锁.txt")
-    if consistency_lock_path.exists():
-        with st.expander("查看产品一致性设计锁"):
-            st.code(consistency_lock_path.read_text(encoding="utf-8"), language="text")
-    pm_review_df = load_sheet("design_images/设计图片PM验收表.xlsx", None)
-    if not pm_review_df.empty:
-        with st.expander("查看设计图片 PM 验收表", expanded=True):
-            st.dataframe(pm_review_df, use_container_width=True)
-            if "PM验收状态" in pm_review_df.columns and (pm_review_df["PM验收状态"] != "通过").any():
-                st.warning("存在需复核或需重生成项目，请优先处理 PM 验收表中的优化建议。")
-
-with tabs[9]:
+with tab_evaluation:
     st.header("方案评价")
-    st.caption("说明 AI 生成方案如何进一步转化为可评价、可优化、可工程化的产品设计方案。")
-    st.info("评价链路：用户评论数据 → 需求提取 → 知识图谱关系路径 → AI 生成参数 → Prompt 模板 → 设计方案生成 → 方案评价与优化。")
+    show_table(load_legacy_sheet("方案评价表.xlsx"), "方案评价表", 20)
+    for rel_path in ["方案优化建议.txt", "优化后AI生成参数.json", "方案评价结果.json"]:
+        path = LEGACY_OUTPUT_DIR / rel_path
+        if path.exists():
+            with st.expander(f"查看 {rel_path}"):
+                st.code(path.read_text(encoding="utf-8"), language="json" if path.suffix == ".json" else "text")
 
-    if st.button(
-        "📊 生成/刷新方案评价",
-        type="primary",
-        use_container_width=True,
-        disabled=input_path is None,
-        help="自动补跑缺失的分析阶段，并生成方案评价表和开题报告实验结果摘要。",
-    ):
-        if run_stage_sequence(
-            EVALUATION_STAGES,
-            input_path,
-            "10 方案评价",
-            "正在生成方案评价与开题报告摘要...",
-            "方案评价已生成",
-        ):
-            st.cache_data.clear()
+with tab_downloads:
+    st.header("下载中心")
+    download_files = [
+        "cleaned_comments.xlsx",
+        "需求关键词提取结果.xlsx",
+        "情感分析结果.xlsx",
+        "BERTopic主题聚类结果.xlsx",
+        "neo4j_nodes.csv",
+        "neo4j_relationships.csv",
+        "import_neo4j.cypher",
+        "需求—功能—结构映射表.xlsx",
+        "AI生成参数表.xlsx",
+        "ai_generation_parameters.json",
+        "prompt_template.txt",
+        "方案评价表.xlsx",
+        "方案评价结果.json",
+        "方案优化建议.txt",
+        "优化后AI生成参数.json",
+        "开题报告实验结果摘要.docx",
+    ]
+    mapping_files = sorted(path.name for path in LEGACY_OUTPUT_DIR.glob("*_需求功能映射数据库.xlsx"))
+    scheme_files = sorted(path.name for path in LEGACY_OUTPUT_DIR.glob("*产品设计方案.*"))
+    found = False
+    for rel_path in mapping_files + scheme_files + download_files:
+        path = LEGACY_OUTPUT_DIR / rel_path
+        if path.exists() and path.is_file():
+            found = True
+            show_legacy_file_download(rel_path)
+    if not found:
+        st.info("还没有可下载的完整流程结果。可在“旧版入口”运行后返回这里下载。")
 
-    evaluation_df = load_sheet("方案评价表.xlsx", None)
-    if evaluation_df.empty:
-        st.info("方案评价尚未生成，请点击上方按钮或运行“10 方案评价”。")
-    else:
-        average_score = round(float(evaluation_df["分值"].mean()), 1) if "分值" in evaluation_df.columns else None
-        if average_score is not None:
-            st.metric("方案综合平均分", f"{average_score} / 100")
-        show_table(evaluation_df, "方案评价表", 20)
-        st.caption("评价结果可反向指导 AI 生成参数更新，形成“生成—评价—优化”的闭环。")
-        optimization_prompt = load_text_output("方案优化建议.txt")
-        optimized_parameters = load_json_output("优化后AI生成参数.json")
-        if optimization_prompt:
-            with st.expander("查看方案优化建议 Prompt"):
-                st.code(optimization_prompt, language="text")
-        if optimized_parameters:
-            with st.expander("查看优化后 AI 生成参数"):
-                st.json(optimized_parameters, expanded=False)
-
-with tabs[10]:
-    show_downloads()
+with tab_legacy:
+    st.header("旧版完整流程已保留")
+    st.write("旧版页面在左侧 Streamlit 多页面导航中：`01_现有流程备份`。")
+    st.write("也可以单独运行：")
+    st.code("streamlit run app_legacy_current.py", language="bash")

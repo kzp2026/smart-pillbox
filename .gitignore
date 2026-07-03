@@ -39,7 +39,10 @@ output/*/cache/
 output/*/user/
 output/__pycache__/
 output/runs/
+output/knowledge_runs/
 output/_test_*.csv
+data/product_knowledge_base.sqlite3
+data/product_knowledge_base.sqlite3-*
 
 # Legacy experiment code
 代码/

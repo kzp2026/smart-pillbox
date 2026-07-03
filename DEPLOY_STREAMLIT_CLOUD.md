@@ -4,6 +4,8 @@
 
 本项目已配置好 Streamlit Cloud 所需文件：
 - `app.py` — 主应用
+- `app_legacy_current.py` — 旧版单次上传全流程备份入口
+- `pages/01_现有流程备份.py` — Streamlit 侧边栏旧版页面
 - `requirements.txt` — Python 依赖
 - `packages.txt` — 系统包（中文字体）
 - `.streamlit/config.toml` — 主题与上传限制
@@ -23,13 +25,22 @@
 
 ## 3. 使用方式
 
-1. 在侧边栏输入产品名称（如：蓝牙耳机、咖啡机、智能手表...）
-2. 上传 `.xlsx` / `.xls` / `.csv` 评论数据
-3. 点击"一键生成全部研究结果"
-4. 在各标签页查看：评论清洗、关键词、痛点、主题聚类、映射数据库、知识图谱、AI 生成参数、设计方案、设计图、方案评价
-5. 在"下载中心"下载所有实验结果文件，或下载完整研究结果归档 ZIP 供后续恢复
+1. 在“导入评论资产”页输入产品名称、品类，并上传 `.xlsx` / `.xls` / `.csv` 评论数据。
+2. 点击“存入知识库”，系统会保存原始评论并抽取基础需求证据。
+3. 在“需求生成”页输入新产品和需求描述。
+4. 系统会从历史评论知识库中检索证据，生成设计方案、合理性评分和写实渲染提示词。
+5. 如需旧版完整流程，请打开侧边栏 `01_现有流程备份`。
 
-## 4. DeepSeek 增强
+## 4. Supabase / PostgreSQL 持久化
+
+推荐在 Streamlit Cloud Secrets 中配置云数据库：
+```toml
+PRODUCT_KB_DATABASE_URL = "postgresql://user:password@host:5432/postgres"
+```
+
+Supabase 项目可在 Project Settings → Database 中复制 PostgreSQL 连接字符串。没有配置时应用会自动回退到本地 SQLite，但 Streamlit Cloud 重启后本地文件不适合长期保存。
+
+## 5. DeepSeek 增强
 
 在 Streamlit Cloud 的“管理应用 → 应用设置 → 秘密”中配置：
 ```toml
@@ -62,6 +73,6 @@ IMAGE_QUALITY = "medium"
 
 配置保存并重启后，进入“设计图片”页点击“生成/重新生成六类写实渲染图”。不要把密钥写入代码或提交到 GitHub。
 
-## 5. 结果持久化
+## 6. 结果持久化
 
-Streamlit Cloud 的运行目录不是长期数据库。请在“下载中心”下载完整研究结果归档 ZIP；后续需要继续展示时，在侧边栏“恢复历史结果归档”上传该 ZIP 即可恢复表格、设计图、方案评价和开题报告摘要。
+Streamlit Cloud 的运行目录不是长期数据库。新版建议使用 Supabase/PostgreSQL 保存评论知识库；旧版流程仍可在“下载中心”下载完整研究结果归档 ZIP。
