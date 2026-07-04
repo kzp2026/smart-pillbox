@@ -8,6 +8,28 @@ from scripts.product_knowledge_base import ProductKnowledgeBase, generate_design
 
 
 class ProductKnowledgeBaseTests(unittest.TestCase):
+    def test_ingest_uses_bulk_comment_insert_path(self) -> None:
+        class BulkOnlyKnowledgeBase(ProductKnowledgeBase):
+            def _execute_ignore(self, conn, statement: str, params: tuple) -> None:  # type: ignore[override]
+                raise AssertionError("comment import should not execute one SQL statement per comment")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "kb.sqlite3"
+            kb = BulkOnlyKnowledgeBase(f"sqlite:///{db_path}")
+            kb.initialize()
+
+            product_id, batch_id = kb.ingest_comment_batch(
+                product_name="智能药盒",
+                category="适老健康",
+                source_filename="bulk.csv",
+                comments=["提醒要明显", "提醒要明显", "药仓分格清楚", ""],
+            )
+
+            self.assertGreater(product_id, 0)
+            self.assertGreater(batch_id, 0)
+            context = kb.search_context("提醒 分格", limit=5)
+            self.assertEqual(context["evidence_count"], 2)
+
     def test_ingests_comments_and_retrieves_relevant_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "kb.sqlite3"
