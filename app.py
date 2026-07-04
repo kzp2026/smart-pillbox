@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -202,12 +203,467 @@ def show_legacy_file_download(relative_path: str) -> None:
         )
 
 
+def format_number(value: int | float | None) -> str:
+    return f"{int(value or 0):,}"
+
+
+def inject_cloud_studio_theme() -> None:
+    st.markdown(
+        """
+        <style>
+            :root {
+                --studio-bg: #f6f9ff;
+                --studio-panel: rgba(255, 255, 255, 0.92);
+                --studio-panel-strong: #ffffff;
+                --studio-border: #d9e4f5;
+                --studio-border-strong: #b9cef0;
+                --studio-text: #0f1f3d;
+                --studio-muted: #5f7190;
+                --studio-blue: #1677ff;
+                --studio-cyan: #18b7cf;
+                --studio-green: #22b573;
+                --studio-warn: #ff9f1c;
+                --studio-shadow: 0 18px 50px rgba(42, 74, 121, 0.11);
+            }
+
+            .stApp {
+                background:
+                    linear-gradient(180deg, rgba(230, 240, 255, 0.78) 0%, rgba(247, 250, 255, 0.96) 38%, #ffffff 100%);
+                color: var(--studio-text);
+            }
+
+            .block-container {
+                max-width: 1480px;
+                padding-top: 2rem;
+                padding-bottom: 3rem;
+            }
+
+            [data-testid="stSidebar"] {
+                background: linear-gradient(180deg, #f4f8ff 0%, #ffffff 48%, #eef6ff 100%);
+                border-right: 1px solid var(--studio-border);
+            }
+
+            [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h1,
+            [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
+            [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+                color: var(--studio-text);
+                letter-spacing: 0;
+            }
+
+            [data-testid="stSidebar"] [data-testid="stAlert"] {
+                border-radius: 8px;
+                border: 1px solid rgba(34, 181, 115, 0.24);
+                box-shadow: 0 10px 24px rgba(34, 181, 115, 0.08);
+            }
+
+            div[data-testid="stTextInput"] input,
+            div[data-testid="stTextArea"] textarea,
+            div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+                border-radius: 8px;
+                border-color: var(--studio-border);
+                background-color: rgba(255, 255, 255, 0.94);
+                color: var(--studio-text);
+                -webkit-text-fill-color: var(--studio-text);
+            }
+
+            div[data-testid="stTextInput"] input::placeholder,
+            div[data-testid="stTextArea"] textarea::placeholder {
+                color: #8ba0c0;
+                -webkit-text-fill-color: #8ba0c0;
+                opacity: 1;
+            }
+
+            div[data-testid="stTextInput"] input:focus,
+            div[data-testid="stTextArea"] textarea:focus {
+                border-color: var(--studio-blue);
+                box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.12);
+            }
+
+            .stButton > button,
+            .stDownloadButton > button {
+                border-radius: 8px;
+                border: 1px solid var(--studio-border-strong);
+                box-shadow: 0 8px 22px rgba(22, 119, 255, 0.10);
+                font-weight: 650;
+            }
+
+            .stButton > button[kind="primary"] {
+                background: linear-gradient(135deg, var(--studio-blue), #0aa6e8);
+                border-color: transparent;
+            }
+
+            [data-testid="stFileUploader"] section {
+                border-radius: 10px;
+                border: 1.5px dashed #a9c4ea;
+                background: rgba(247, 251, 255, 0.92);
+            }
+
+            .stTabs [data-baseweb="tab-list"] {
+                gap: 0.25rem;
+                border-bottom: 1px solid var(--studio-border);
+                background: rgba(255, 255, 255, 0.7);
+                padding: 0.35rem 0.3rem 0;
+                border-radius: 8px 8px 0 0;
+            }
+
+            .stTabs [data-baseweb="tab"] {
+                height: 44px;
+                border-radius: 8px 8px 0 0;
+                color: var(--studio-muted);
+                font-weight: 650;
+                white-space: nowrap;
+            }
+
+            .stTabs [aria-selected="true"] {
+                color: var(--studio-blue);
+                background: #ffffff;
+                border: 1px solid var(--studio-border);
+                border-bottom-color: #ffffff;
+            }
+
+            [data-testid="stMetric"],
+            [data-testid="stDataFrame"],
+            [data-testid="stExpander"],
+            div[data-testid="stAlert"] {
+                border-radius: 8px;
+            }
+
+            .cloud-studio-shell {
+                border: 1px solid var(--studio-border);
+                border-radius: 10px;
+                background: var(--studio-panel);
+                box-shadow: var(--studio-shadow);
+                padding: 1.2rem 1.25rem;
+                margin-bottom: 1.1rem;
+            }
+
+            .studio-topbar {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 1rem;
+                margin-bottom: 1rem;
+            }
+
+            .studio-brand {
+                display: flex;
+                align-items: flex-start;
+                gap: 0.8rem;
+            }
+
+            .studio-logo {
+                width: 38px;
+                height: 38px;
+                border-radius: 9px;
+                display: grid;
+                place-items: center;
+                background: linear-gradient(145deg, #1677ff, #18b7cf);
+                color: #fff;
+                font-weight: 900;
+                box-shadow: 0 10px 24px rgba(22, 119, 255, 0.22);
+            }
+
+            .studio-title {
+                font-size: 2rem !important;
+                line-height: 1.16 !important;
+                margin: 0;
+                color: var(--studio-text);
+                letter-spacing: 0;
+            }
+
+            .studio-subtitle {
+                margin-top: 0.35rem;
+                color: var(--studio-muted);
+                font-size: 0.95rem;
+            }
+
+            .studio-actions {
+                display: flex;
+                gap: 0.6rem;
+                flex-wrap: wrap;
+                justify-content: flex-end;
+            }
+
+            .studio-pill {
+                border-radius: 999px;
+                padding: 0.45rem 0.7rem;
+                border: 1px solid var(--studio-border);
+                background: #ffffff;
+                color: var(--studio-muted);
+                font-size: 0.82rem;
+                font-weight: 700;
+            }
+
+            .studio-pill.is-live {
+                color: #0a7a4b;
+                border-color: rgba(34, 181, 115, 0.28);
+                background: rgba(34, 181, 115, 0.08);
+            }
+
+            .studio-flow {
+                display: flex;
+                gap: 0.55rem;
+                flex-wrap: wrap;
+                margin: 0.75rem 0 1.1rem;
+            }
+
+            .studio-step {
+                min-height: 42px;
+                display: flex;
+                align-items: center;
+                gap: 0.48rem;
+                padding: 0.55rem 0.72rem;
+                border: 1px solid var(--studio-border);
+                border-radius: 8px;
+                background: #ffffff;
+                color: var(--studio-muted);
+                font-size: 0.86rem;
+                font-weight: 700;
+            }
+
+            .studio-step span {
+                width: 22px;
+                height: 22px;
+                display: grid;
+                place-items: center;
+                border-radius: 7px;
+                color: #ffffff;
+                background: linear-gradient(135deg, var(--studio-blue), var(--studio-cyan));
+                font-size: 0.78rem;
+            }
+
+            .studio-dashboard {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr);
+                gap: 1rem;
+            }
+
+            .studio-card {
+                border: 1px solid var(--studio-border);
+                background: var(--studio-panel-strong);
+                border-radius: 8px;
+                padding: 1rem;
+                min-width: 0;
+            }
+
+            .studio-card-title {
+                margin: 0 0 0.75rem;
+                color: var(--studio-text);
+                font-size: 1rem;
+                font-weight: 800;
+            }
+
+            .studio-metrics {
+                display: grid;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                border: 1px solid var(--studio-border);
+                border-radius: 8px;
+                overflow: hidden;
+            }
+
+            .studio-metric {
+                padding: 0.86rem 0.8rem;
+                border-right: 1px solid var(--studio-border);
+                min-width: 0;
+            }
+
+            .studio-metric:last-child {
+                border-right: 0;
+            }
+
+            .studio-metric small {
+                display: block;
+                color: var(--studio-muted);
+                font-size: 0.76rem;
+                margin-bottom: 0.28rem;
+            }
+
+            .studio-metric strong {
+                display: block;
+                color: var(--studio-text);
+                font-size: 1.28rem;
+                line-height: 1.1;
+            }
+
+            .studio-list {
+                display: grid;
+                gap: 0.5rem;
+                margin: 0.85rem 0 0;
+                padding: 0;
+                list-style: none;
+            }
+
+            .studio-list li {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 1rem;
+                padding: 0.62rem 0.7rem;
+                border-radius: 8px;
+                background: #f7fbff;
+                border: 1px solid #e7eefb;
+                color: var(--studio-text);
+            }
+
+            .studio-list span {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                min-width: 0;
+            }
+
+            .studio-list strong {
+                color: var(--studio-blue);
+                white-space: nowrap;
+                font-size: 0.86rem;
+            }
+
+            .studio-next {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.65rem;
+            }
+
+            .studio-next-item {
+                min-height: 92px;
+                border: 1px solid var(--studio-border);
+                border-radius: 8px;
+                padding: 0.82rem;
+                background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+            }
+
+            .studio-next-item b {
+                display: block;
+                color: var(--studio-text);
+                font-size: 0.92rem;
+                margin-bottom: 0.32rem;
+            }
+
+            .studio-next-item small {
+                color: var(--studio-muted);
+                line-height: 1.45;
+            }
+
+            @media (max-width: 920px) {
+                .block-container {
+                    padding-left: 1rem;
+                    padding-right: 1rem;
+                }
+
+                .studio-topbar,
+                .studio-dashboard {
+                    display: block;
+                }
+
+                .studio-actions,
+                .studio-dashboard .studio-card + .studio-card {
+                    margin-top: 0.9rem;
+                }
+
+                .studio-metrics,
+                .studio-next {
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                }
+            }
+
+            @media (max-width: 560px) {
+                .studio-title {
+                    font-size: 1.55rem !important;
+                }
+
+                .studio-metrics,
+                .studio-next {
+                    grid-template-columns: 1fr;
+                }
+
+                .studio-metric {
+                    border-right: 0;
+                    border-bottom: 1px solid var(--studio-border);
+                }
+
+                .studio-metric:last-child {
+                    border-bottom: 0;
+                }
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_cloud_studio_overview(products: list[dict], database_url: str, dashscope_ready: bool) -> None:
+    product_count = len(products)
+    comment_count = sum(int(product.get("comment_count") or 0) for product in products)
+    requirement_count = sum(int(product.get("requirement_count") or 0) for product in products)
+    latest_update = str(products[0].get("updated_at", "暂无"))[:16] if products else "暂无"
+    database_label = "Supabase / PostgreSQL" if not database_url.startswith("sqlite") else f"本地 SQLite / {DEFAULT_DB_PATH.name}"
+    dashscope_label = "已启用" if dashscope_ready else "待配置"
+    dashscope_class = "is-live" if dashscope_ready else ""
+    db_class = "is-live" if not database_url.startswith("sqlite") else ""
+    recent_rows = "".join(
+        f"<li><span>{escape(str(product.get('name', '未命名产品')))}</span><strong>{format_number(product.get('comment_count'))} 条评论</strong></li>"
+        for product in products[:5]
+    )
+    if not recent_rows:
+        recent_rows = "<li><span>暂无产品资产</span><strong>先导入评论</strong></li>"
+
+    st.markdown(
+        f"""
+        <section class="cloud-studio-shell">
+            <div class="studio-topbar">
+                <div class="studio-brand">
+                    <div class="studio-logo">AI</div>
+                    <div>
+                        <h1 class="studio-title">产品评论知识库智能体</h1>
+                        <div class="studio-subtitle">导入评论数据 -> 检索历史证据 -> 生成设计方案与写实渲染提示词。</div>
+                    </div>
+                </div>
+                <div class="studio-actions">
+                    <span class="studio-pill {db_class}">{escape(database_label)}</span>
+                    <span class="studio-pill {dashscope_class}">阿里云写实渲染：{dashscope_label}</span>
+                </div>
+            </div>
+            <div class="studio-flow">
+                <div class="studio-step"><span>1</span>导入评论资产</div>
+                <div class="studio-step"><span>2</span>需求生成</div>
+                <div class="studio-step"><span>3</span>知识库概览</div>
+                <div class="studio-step"><span>4</span>评论分析模块</div>
+                <div class="studio-step"><span>5</span>设计方案与图片</div>
+            </div>
+            <div class="studio-dashboard">
+                <div class="studio-card">
+                    <h2 class="studio-card-title">知识库概览</h2>
+                    <div class="studio-metrics">
+                        <div class="studio-metric"><small>产品资产</small><strong>{format_number(product_count)}</strong></div>
+                        <div class="studio-metric"><small>评论沉淀</small><strong>{format_number(comment_count)}</strong></div>
+                        <div class="studio-metric"><small>需求证据</small><strong>{format_number(requirement_count)}</strong></div>
+                        <div class="studio-metric"><small>最近更新</small><strong>{escape(latest_update)}</strong></div>
+                    </div>
+                    <ul class="studio-list">{recent_rows}</ul>
+                </div>
+                <div class="studio-card">
+                    <h2 class="studio-card-title">下一步动作</h2>
+                    <div class="studio-next">
+                        <div class="studio-next-item"><b>导入</b><small>把新产品评论继续沉淀进同一个知识库。</small></div>
+                        <div class="studio-next-item"><b>生成</b><small>输入新产品需求，调用历史证据生成方案。</small></div>
+                        <div class="studio-next-item"><b>分析</b><small>查看清洗、关键词、情感、聚类和映射结果。</small></div>
+                        <div class="studio-next-item"><b>渲染</b><small>保留 DashScope 写实效果图 API 入口。</small></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 st.set_page_config(page_title="产品评论知识库智能体", page_icon="🧠", layout="wide")
+inject_cloud_studio_theme()
+database_url = get_database_url()
 
 with st.sidebar:
     st.title("🧠 知识库控制台")
     owner_id = st.text_input("私人库 ID", value="private", help="当前先给你个人使用；后期共享时可扩展为登录用户 ID。")
-    database_url = get_database_url()
     if database_url.startswith("sqlite"):
         st.info(f"当前使用本地 SQLite：{DEFAULT_DB_PATH.name}")
     else:
@@ -235,9 +691,9 @@ with st.sidebar:
 
 
 kb = get_kb(database_url, owner_id)
+products = kb.list_products()
 
-st.title("产品评论知识库智能体")
-st.caption("把导入过的评论长期沉淀为私人产品设计数据库；后续只输入产品需求，就能检索历史证据并生成方案与写实渲染提示词。")
+render_cloud_studio_overview(products, database_url, bool(configured_dashscope_key))
 
 (
     tab_import,
@@ -354,7 +810,6 @@ with tab_generate:
 
 with tab_library:
     st.header("知识库概览")
-    products = kb.list_products()
     if products:
         st.dataframe(pd.DataFrame(products), use_container_width=True, hide_index=True)
     else:
