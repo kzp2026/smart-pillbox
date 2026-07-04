@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.pyc
 
@@ -41,6 +41,7 @@ output/__pycache__/
 output/runs/
 output/knowledge_runs/
 output/_test_*.csv
+output/ui-cloud-studio-*.png
 data/product_knowledge_base.sqlite3
 data/product_knowledge_base.sqlite3-*
 
