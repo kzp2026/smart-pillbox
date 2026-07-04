@@ -811,7 +811,76 @@ with tab_generate:
 with tab_library:
     st.header("知识库概览")
     if products:
-        st.dataframe(pd.DataFrame(products), use_container_width=True, hide_index=True)
+        product_df = pd.DataFrame(products).rename(
+            columns={
+                "id": "ID",
+                "name": "产品名称",
+                "category": "产品品类",
+                "description": "备注",
+                "comment_count": "评论数",
+                "requirement_count": "需求证据数",
+                "created_at": "创建时间",
+                "updated_at": "更新时间",
+            }
+        )
+        visible_columns = ["ID", "产品名称", "产品品类", "评论数", "需求证据数", "更新时间"]
+        st.dataframe(product_df[visible_columns], use_container_width=True, hide_index=True)
+
+        st.subheader("产品管理")
+        selected_product_label = st.selectbox(
+            "选择要管理的产品",
+            [f"{product['id']} · {product['name']}" for product in products],
+        )
+        selected_product_id = int(selected_product_label.split(" · ", 1)[0])
+        selected_product = next(product for product in products if int(product["id"]) == selected_product_id)
+
+        edit_left, edit_right = st.columns([0.5, 0.5])
+        with edit_left:
+            edited_name = st.text_input("产品名称", value=str(selected_product.get("name") or ""), key=f"edit_product_name_{selected_product_id}")
+        with edit_right:
+            edited_category = st.text_input("产品品类", value=str(selected_product.get("category") or ""), key=f"edit_product_category_{selected_product_id}")
+        edited_description = st.text_area(
+            "备注",
+            value=str(selected_product.get("description") or ""),
+            height=80,
+            key=f"edit_product_description_{selected_product_id}",
+        )
+        save_product_clicked = st.button(
+            "保存产品信息",
+            type="primary",
+            use_container_width=True,
+            disabled=not edited_name.strip(),
+        )
+        if save_product_clicked:
+            try:
+                if kb.update_product(selected_product_id, edited_name, edited_category, edited_description):
+                    st.success("产品信息已更新。")
+                    st.cache_resource.clear()
+                    st.rerun()
+                else:
+                    st.warning("没有找到要更新的产品。")
+            except Exception as exc:
+                st.error(f"更新失败：{exc}")
+
+        with st.expander("删除产品数据", expanded=False):
+            st.warning("删除后会移除该产品、评论批次、评论和需求证据。已生成记录不会自动删除。")
+            delete_confirm = st.text_input(
+                f"如需删除，请输入产品名称：{selected_product['name']}",
+                key=f"delete_confirm_{selected_product_id}",
+            )
+            delete_clicked = st.button(
+                "确认删除该产品",
+                use_container_width=True,
+                disabled=delete_confirm != selected_product["name"],
+                key=f"delete_product_{selected_product_id}",
+            )
+            if delete_clicked:
+                if kb.delete_product(selected_product_id):
+                    st.success("产品及关联评论数据已删除。")
+                    st.cache_resource.clear()
+                    st.rerun()
+                else:
+                    st.warning("没有找到要删除的产品。")
     else:
         st.info("知识库还没有评论资产，请先导入至少一个产品的评论数据。")
 
