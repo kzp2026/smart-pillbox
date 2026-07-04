@@ -9,13 +9,14 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from scripts.common import build_cleaned_dataframe, detect_comment_column, read_table
+from scripts.common import build_cleaned_dataframe
 from scripts.product_knowledge_base import (
     DEFAULT_DB_PATH,
     ProductKnowledgeBase,
     generate_design_package,
     normalize_database_url,
 )
+from scripts.upload_parsing import candidate_comment_columns, default_comment_column, extract_comments, read_upload_table
 
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -51,16 +52,13 @@ def get_kb(database_url: str, owner_id: str) -> ProductKnowledgeBase:
     return kb
 
 
-def load_uploaded_comments(uploaded_file) -> tuple[list[str], str]:
-    suffix = Path(uploaded_file.name).suffix.lower()
-    temp_dir = OUTPUT_DIR / "_uploads"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    temp_path = temp_dir / f"uploaded_comments{suffix}"
-    temp_path.write_bytes(uploaded_file.getvalue())
-    df = read_table(temp_path)
-    comment_col = detect_comment_column(df)
-    comments = df[comment_col].dropna().astype(str).tolist()
-    return comments, str(comment_col)
+@st.cache_data(show_spinner=False, max_entries=8)
+def parse_uploaded_table(filename: str, file_bytes: bytes) -> pd.DataFrame:
+    return read_upload_table(filename, file_bytes)
+
+
+def load_uploaded_table(uploaded_file) -> pd.DataFrame:
+    return parse_uploaded_table(uploaded_file.name, uploaded_file.getvalue())
 
 
 def derive_requirements_from_comments(product_id: int, batch_id: int, comments: list[str], kb: ProductKnowledgeBase) -> int:
@@ -167,6 +165,12 @@ def load_legacy_sheet(filename: str, sheet_name: str | None = None) -> pd.DataFr
     path = LEGACY_OUTPUT_DIR / filename
     if not path.exists():
         return pd.DataFrame()
+    return load_legacy_sheet_cached(str(path), sheet_name or "", path.stat().st_mtime_ns)
+
+
+@st.cache_data(show_spinner=False, max_entries=48)
+def load_legacy_sheet_cached(path_text: str, sheet_name: str, mtime_ns: int) -> pd.DataFrame:
+    path = Path(path_text)
     try:
         return pd.read_excel(path, sheet_name=sheet_name or 0)
     except Exception:
@@ -177,6 +181,12 @@ def load_legacy_csv(filename: str) -> pd.DataFrame:
     path = LEGACY_OUTPUT_DIR / filename
     if not path.exists():
         return pd.DataFrame()
+    return load_legacy_csv_cached(str(path), path.stat().st_mtime_ns)
+
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def load_legacy_csv_cached(path_text: str, mtime_ns: int) -> pd.DataFrame:
+    path = Path(path_text)
     try:
         return pd.read_csv(path)
     except Exception:
@@ -699,65 +709,88 @@ render_cloud_studio_overview(products, database_url, bool(configured_dashscope_k
     tab_import,
     tab_generate,
     tab_library,
-    tab_clean,
-    tab_keywords,
-    tab_sentiment,
-    tab_topics,
-    tab_mapping,
-    tab_neo4j,
-    tab_ai_params,
-    tab_scheme,
-    tab_images,
-    tab_evaluation,
     tab_downloads,
     tab_legacy,
 ) = st.tabs([
     "导入评论资产",
     "需求生成",
     "知识库概览",
-    "📋 评论清洗",
-    "🔑 关键词提取",
-    "💬 情感分析",
-    "🧩 主题聚类",
-    "🗺 需求映射",
-    "🕸 Neo4j图谱",
-    "🤖 AI生成参数",
-    "📝 设计方案",
-    "🎨 设计图片",
-    "📊 方案评价",
     "📥 下载中心",
-    "旧版入口",
+    "旧版结果",
 ])
 
 with tab_import:
     st.header("导入评论资产")
+    latest_import_report = st.session_state.get("latest_import_report")
+    if latest_import_report:
+        st.success(
+            "最近一次导入完成："
+            f"新增 {latest_import_report.get('inserted_count', 0)} 条，"
+            f"跳过重复 {latest_import_report.get('duplicate_total', 0)} 条，"
+            f"生成 {latest_import_report.get('requirement_count', 0)} 条需求证据。"
+        )
+        report_cols = st.columns(5)
+        report_cols[0].metric("上传行数", format_number(latest_import_report.get("input_count", 0)))
+        report_cols[1].metric("有效评论", format_number(latest_import_report.get("valid_count", 0)))
+        report_cols[2].metric("新增入库", format_number(latest_import_report.get("inserted_count", 0)))
+        report_cols[3].metric("文件内重复", format_number(latest_import_report.get("duplicate_in_file_count", 0)))
+        report_cols[4].metric("库内重复", format_number(latest_import_report.get("duplicate_existing_count", 0)))
+
     col_left, col_right = st.columns([0.38, 0.62])
+    uploaded_df = pd.DataFrame()
+    selected_comment_col = ""
+    preview_comments: list[str] = []
     with col_left:
         product_name = st.text_input("产品名称", placeholder="例如：智能药盒、保温杯、蓝牙耳机")
         category = st.text_input("产品品类", placeholder="例如：适老健康、厨房电器、可穿戴设备")
         uploaded = st.file_uploader("上传评论数据", type=["xlsx", "xls", "csv"])
-        import_clicked = st.button("存入知识库", type="primary", use_container_width=True, disabled=uploaded is None or not product_name.strip())
-    with col_right:
-        st.info("导入后会保存原始评论，并自动抽取一批基础需求标签。后续生成新产品时，会从这些历史评论和需求证据中检索相关内容。")
         if uploaded is not None:
             try:
-                preview_comments, detected_col = load_uploaded_comments(uploaded)
-                st.caption(f"识别评论列：{detected_col}，共 {len(preview_comments)} 条")
-                st.dataframe(pd.DataFrame({"评论预览": preview_comments[:20]}), use_container_width=True, hide_index=True)
+                uploaded_df = load_uploaded_table(uploaded)
+                column_options = candidate_comment_columns(uploaded_df)
+                suggested_col = default_comment_column(uploaded_df)
+                selected_comment_col = st.selectbox(
+                    "选择评论列",
+                    column_options,
+                    index=column_options.index(suggested_col) if suggested_col in column_options else 0,
+                )
+                preview_comments = extract_comments(uploaded_df, selected_comment_col)
             except Exception as exc:
                 st.error(f"读取上传文件失败：{exc}")
-                preview_comments = []
-        else:
-            preview_comments = []
+        import_clicked = st.button(
+            "存入知识库",
+            type="primary",
+            use_container_width=True,
+            disabled=uploaded is None or not product_name.strip() or not selected_comment_col,
+        )
+    with col_right:
+        st.info("导入后会保存原始评论，并自动抽取一批基础需求标签。后续生成新产品时，会从这些历史评论和需求证据中检索相关内容。")
+        if uploaded is not None and not uploaded_df.empty and selected_comment_col:
+            st.caption(f"当前评论列：{selected_comment_col}，有效评论 {len(preview_comments)} 条")
+            st.dataframe(pd.DataFrame({"评论预览": preview_comments[:20]}), use_container_width=True, hide_index=True)
+        elif uploaded is None:
+            st.caption("上传 CSV 或 Excel 后，可以在左侧选择评论列并预览前 20 条。")
 
     if import_clicked:
         if not preview_comments:
             st.error("没有可导入的评论。")
         else:
-            product_id, batch_id = kb.ingest_comment_batch(product_name, category, uploaded.name, preview_comments)
-            requirement_count = derive_requirements_from_comments(product_id, batch_id, preview_comments, kb)
-            st.success(f"已存入知识库：{len(preview_comments)} 条评论，自动生成 {requirement_count} 条基础需求证据。")
+            progress = st.progress(0)
+            status = st.empty()
+            status.write("1/4 正在校验评论列和有效评论...")
+            progress.progress(15)
+            status.write("2/4 正在写入云数据库...")
+            report = kb.ingest_comment_batch_with_report(product_name, category, uploaded.name, preview_comments)
+            progress.progress(65)
+            status.write("3/4 正在抽取基础需求证据...")
+            requirement_count = derive_requirements_from_comments(int(report["product_id"]), int(report["batch_id"]), preview_comments, kb)
+            progress.progress(90)
+            status.write("4/4 正在刷新知识库概览...")
+            report["requirement_count"] = requirement_count
+            report["selected_comment_column"] = selected_comment_col
+            st.session_state["latest_import_report"] = report
             st.cache_resource.clear()
+            progress.progress(100)
             st.rerun()
 
 with tab_generate:
@@ -884,102 +917,6 @@ with tab_library:
     else:
         st.info("知识库还没有评论资产，请先导入至少一个产品的评论数据。")
 
-with tab_clean:
-    st.header("评论数据清洗")
-    st.caption("完整流程模块已保留。这里预览旧版流程生成的清洗结果；需要重新运行时请进入“旧版入口”。")
-    show_table(load_legacy_sheet("cleaned_comments.xlsx"), "清洗后评论数据", 80)
-
-with tab_keywords:
-    st.header("TF-IDF 关键词提取")
-    show_table(load_legacy_sheet("需求关键词提取结果.xlsx", "关键词排名"), "关键词排名", 80)
-    show_table(load_legacy_sheet("需求关键词提取结果.xlsx", "评论关键词明细"), "评论关键词明细", 80)
-    show_table(load_legacy_sheet("需求关键词提取结果.xlsx", "关键词共现矩阵"), "关键词共现矩阵", 60)
-
-with tab_sentiment:
-    st.header("用户痛点与中文情感分析")
-    show_table(load_legacy_sheet("情感分析结果.xlsx", "用户痛点"), "用户痛点", 50)
-    show_table(load_legacy_sheet("情感分析结果.xlsx", "用户满意点"), "用户满意点", 50)
-    show_table(load_legacy_sheet("情感分析结果.xlsx", "关键词情感统计"), "关键词情感统计", 80)
-    show_table(load_legacy_sheet("情感分析结果.xlsx", "评论情感明细"), "评论情感明细", 80)
-
-with tab_topics:
-    st.header("评论主题聚类")
-    show_table(load_legacy_sheet("BERTopic主题聚类结果.xlsx", "主题汇总"), "主题汇总", 30)
-    show_table(load_legacy_sheet("BERTopic主题聚类结果.xlsx", "评论主题聚类结果"), "评论主题聚类明细", 80)
-
-with tab_mapping:
-    st.header("用户需求 → 产品功能 → 产品结构 映射数据库")
-    mapping_files = sorted(LEGACY_OUTPUT_DIR.glob("*_需求功能映射数据库.xlsx"))
-    if not mapping_files:
-        st.info("需求映射数据库尚未生成。可在“旧版入口”运行完整流程。")
-    else:
-        mapping_file = mapping_files[-1].name
-        st.caption(f"当前预览：{mapping_file}")
-        show_table(load_legacy_sheet(mapping_file, "用户需求表"), "产品需求", 50)
-        show_table(load_legacy_sheet(mapping_file, "设计机会点"), "设计机会点", 50)
-        show_table(load_legacy_sheet(mapping_file, "产品功能表"), "产品功能", 50)
-        show_table(load_legacy_sheet(mapping_file, "产品结构表"), "产品结构", 50)
-        show_table(load_legacy_sheet(mapping_file, "需求功能映射"), "需求-功能映射", 80)
-        show_table(load_legacy_sheet(mapping_file, "功能结构映射"), "功能-结构映射", 80)
-
-with tab_neo4j:
-    st.header("Neo4j 知识图谱数据")
-    show_table(load_legacy_csv("neo4j_nodes.csv"), "知识图谱节点表", 100)
-    show_table(load_legacy_csv("neo4j_relationships.csv"), "知识图谱关系表", 100)
-    cypher_path = LEGACY_OUTPUT_DIR / "import_neo4j.cypher"
-    if cypher_path.exists():
-        st.subheader("Cypher 导入脚本")
-        st.code(cypher_path.read_text(encoding="utf-8"), language="cypher")
-
-with tab_ai_params:
-    st.header("AI 生成参数")
-    show_table(load_legacy_sheet("需求—功能—结构映射表.xlsx"), "需求—功能—结构映射表", 80)
-    show_table(load_legacy_sheet("AI生成参数表.xlsx"), "AI 生成参数表", 80)
-    for rel_path in ["ai_generation_parameters.json", "prompt_template.txt"]:
-        path = LEGACY_OUTPUT_DIR / rel_path
-        if path.exists():
-            with st.expander(f"查看 {rel_path}"):
-                st.code(path.read_text(encoding="utf-8"), language="json" if path.suffix == ".json" else "text")
-
-with tab_scheme:
-    st.header("产品设计方案")
-    scheme_files = sorted(LEGACY_OUTPUT_DIR.glob("*产品设计方案.txt"))
-    if not scheme_files:
-        st.info("设计方案尚未生成。可在“旧版入口”运行完整流程。")
-    else:
-        scheme_file = scheme_files[-1]
-        st.caption(f"当前预览：{scheme_file.name}")
-        st.markdown(scheme_file.read_text(encoding="utf-8"))
-
-with tab_images:
-    st.header("设计图片")
-    st.caption("保留产品效果图、爆炸图、细节图、三视图、设计展板和产品使用效果图模块。")
-    image_dir = LEGACY_OUTPUT_DIR / "design_images"
-    image_files = sorted(image_dir.glob("*.png")) if image_dir.exists() else []
-    if not image_files:
-        st.info("设计图片尚未生成。也可以在“需求生成”页用阿里云百炼生成新版写实效果图。")
-    else:
-        columns = st.columns(3)
-        for index, image_path in enumerate(image_files):
-            with columns[index % 3]:
-                st.image(str(image_path), caption=image_path.name, use_container_width=True)
-                st.download_button(
-                    f"下载 {image_path.name}",
-                    data=image_path.read_bytes(),
-                    file_name=image_path.name,
-                    mime="image/png",
-                    use_container_width=True,
-                )
-
-with tab_evaluation:
-    st.header("方案评价")
-    show_table(load_legacy_sheet("方案评价表.xlsx"), "方案评价表", 20)
-    for rel_path in ["方案优化建议.txt", "优化后AI生成参数.json", "方案评价结果.json"]:
-        path = LEGACY_OUTPUT_DIR / rel_path
-        if path.exists():
-            with st.expander(f"查看 {rel_path}"):
-                st.code(path.read_text(encoding="utf-8"), language="json" if path.suffix == ".json" else "text")
-
 with tab_downloads:
     st.header("下载中心")
     download_files = [
@@ -1012,7 +949,8 @@ with tab_downloads:
         st.info("还没有可下载的完整流程结果。可在“旧版入口”运行后返回这里下载。")
 
 with tab_legacy:
-    st.header("旧版完整流程已保留")
-    st.write("旧版页面在左侧 Streamlit 多页面导航中：`01_现有流程备份`。")
-    st.write("也可以单独运行：")
+    st.header("旧版模块已拆到独立页面")
+    st.write("查看旧版清洗、关键词、情感、主题、图谱、设计图片和评价结果：左侧页面导航 `03_旧版结果预览`。")
+    st.write("运行旧版完整流程：左侧页面导航 `01_现有流程备份`。")
+    st.write("本地也可以单独运行：")
     st.code("streamlit run app_legacy_current.py", language="bash")

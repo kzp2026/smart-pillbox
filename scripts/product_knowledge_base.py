@@ -219,10 +219,23 @@ class ProductKnowledgeBase:
         source_filename: str,
         comments: list[str],
     ) -> tuple[int, int]:
+        report = self.ingest_comment_batch_with_report(product_name, category, source_filename, comments)
+        return int(report["product_id"]), int(report["batch_id"])
+
+    def ingest_comment_batch_with_report(
+        self,
+        product_name: str,
+        category: str,
+        source_filename: str,
+        comments: list[str],
+    ) -> dict:
         product_id = self.upsert_product(product_name, category=category)
         cleaned = [text for text in (clean_text(comment) for comment in comments) if text]
+        fingerprints = [text_fingerprint(comment) for comment in cleaned]
+        unique_fingerprints = set(fingerprints)
         now = utc_now()
         with self.connect() as conn:
+            before_count = self._count_comments(conn, product_id)
             cursor = conn.execute(
                 self._sql(
                     "INSERT INTO comment_batches (owner_id, product_id, source_filename, comment_count, created_at) "
@@ -242,13 +255,29 @@ class ProductKnowledgeBase:
                         batch_id,
                         comment,
                         comment,
-                        text_fingerprint(comment),
+                        fingerprint,
                         now,
                     )
-                    for comment in cleaned
+                    for comment, fingerprint in zip(cleaned, fingerprints)
                 ],
             )
-        return product_id, batch_id
+            after_count = self._count_comments(conn, product_id)
+        inserted_count = max(0, after_count - before_count)
+        duplicate_total = max(0, len(cleaned) - inserted_count)
+        duplicate_in_file_count = max(0, len(cleaned) - len(unique_fingerprints))
+        duplicate_existing_count = max(0, duplicate_total - duplicate_in_file_count)
+        return {
+            "product_id": product_id,
+            "batch_id": batch_id,
+            "source_filename": source_filename or "",
+            "input_count": len(comments),
+            "valid_count": len(cleaned),
+            "invalid_count": max(0, len(comments) - len(cleaned)),
+            "inserted_count": inserted_count,
+            "duplicate_in_file_count": duplicate_in_file_count,
+            "duplicate_existing_count": duplicate_existing_count,
+            "duplicate_total": duplicate_total,
+        }
 
     def add_requirement(
         self,
@@ -454,6 +483,14 @@ class ProductKnowledgeBase:
     def _fetchall(self, conn, statement: str, params: tuple) -> list[dict]:
         cursor = conn.execute(self._sql(statement), params)
         return [dict(row) for row in cursor.fetchall()]
+
+    def _count_comments(self, conn, product_id: int) -> int:
+        row = self._fetchone(
+            conn,
+            "SELECT COUNT(*) AS count FROM comments WHERE owner_id = ? AND product_id = ?",
+            (self.owner_id, product_id),
+        )
+        return int((row or {}).get("count") or 0)
 
     def _lastrowid(self, cursor, conn) -> int:
         if self.info.driver == "postgres":
