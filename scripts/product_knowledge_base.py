@@ -9,6 +9,7 @@ from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import urlparse
@@ -31,6 +32,20 @@ def clean_text(value: object) -> str:
 
 def text_fingerprint(value: str) -> str:
     return hashlib.sha256(clean_text(value).encode("utf-8")).hexdigest()
+
+
+def to_json_safe(value: object) -> object:
+    if isinstance(value, dict):
+        return {str(key): to_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_json_safe(item) for item in value]
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 
 def tokenize(text: str) -> list[str]:
@@ -441,8 +456,8 @@ class ProductKnowledgeBase:
                     self.owner_id,
                     clean_text(target_product),
                     clean_text(demand_text),
-                    json.dumps(context, ensure_ascii=False),
-                    json.dumps(result, ensure_ascii=False),
+                    json.dumps(to_json_safe(context), ensure_ascii=False),
+                    json.dumps(to_json_safe(result), ensure_ascii=False),
                     float(result.get("quality_score", 0)),
                     str(result.get("quality_status", "")),
                     utc_now(),

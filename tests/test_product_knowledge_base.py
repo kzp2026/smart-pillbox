@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from decimal import Decimal
 import tempfile
 import unittest
 from pathlib import Path
@@ -131,6 +133,30 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
         self.assertLess(package["quality_score"], 80)
         self.assertEqual(package["quality_status"], "需补充证据")
         self.assertIn("当前知识库证据不足", package["quality_report"]["warnings"][0])
+
+    def test_save_generation_run_accepts_postgres_native_json_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "kb.sqlite3"
+            kb = ProductKnowledgeBase(f"sqlite:///{db_path}")
+            kb.initialize()
+
+            context = {
+                "query": "智能药盒",
+                "requirements": [
+                    {
+                        "title": "定时提醒",
+                        "score": Decimal("92.5"),
+                        "created_at": datetime(2026, 7, 5, 10, 30, tzinfo=timezone.utc),
+                    }
+                ],
+                "comments": [],
+                "evidence_count": 1,
+            }
+            result = generate_design_package("智能药盒", "提醒老人吃药", context)
+
+            run_id = kb.save_generation_run("智能药盒", "提醒老人吃药", context, result)
+
+            self.assertGreater(run_id, 0)
 
     def test_can_update_and_delete_product_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
