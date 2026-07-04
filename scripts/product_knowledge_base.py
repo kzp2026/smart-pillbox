@@ -357,6 +357,48 @@ class ProductKnowledgeBase:
             )
         return rows
 
+    def update_product(self, product_id: int, name: str, category: str = "", description: str = "") -> bool:
+        name = clean_text(name)
+        if not name:
+            raise ValueError("产品名称不能为空。")
+        now = utc_now()
+        with self.connect() as conn:
+            existing = self._fetchone(
+                conn,
+                "SELECT id FROM products WHERE owner_id = ? AND name = ? AND id <> ?",
+                (self.owner_id, name, product_id),
+            )
+            if existing:
+                raise ValueError("同名产品已存在，请换一个名称。")
+            cursor = conn.execute(
+                self._sql(
+                    "UPDATE products SET name = ?, category = ?, description = ?, updated_at = ? "
+                    "WHERE id = ? AND owner_id = ?"
+                ),
+                (name, category or "", description or "", now, product_id, self.owner_id),
+            )
+            return self._rowcount(cursor) > 0
+
+    def delete_product(self, product_id: int) -> bool:
+        with self.connect() as conn:
+            product = self._fetchone(
+                conn,
+                "SELECT id FROM products WHERE id = ? AND owner_id = ?",
+                (product_id, self.owner_id),
+            )
+            if not product:
+                return False
+            for table in ("comments", "requirements", "comment_batches"):
+                conn.execute(
+                    self._sql(f"DELETE FROM {table} WHERE product_id = ? AND owner_id = ?"),
+                    (product_id, self.owner_id),
+                )
+            cursor = conn.execute(
+                self._sql("DELETE FROM products WHERE id = ? AND owner_id = ?"),
+                (product_id, self.owner_id),
+            )
+            return self._rowcount(cursor) > 0
+
     def save_generation_run(self, target_product: str, demand_text: str, context: dict, result: dict) -> int:
         with self.connect() as conn:
             cursor = conn.execute(
@@ -403,6 +445,9 @@ class ProductKnowledgeBase:
             row = conn.execute("SELECT LASTVAL() AS id").fetchone()
             return int(row["id"])
         return int(cursor.lastrowid)
+
+    def _rowcount(self, cursor) -> int:
+        return int(cursor.rowcount or 0)
 
 
 def generate_design_package(target_product: str, demand_text: str, context: dict) -> dict:
@@ -499,4 +544,3 @@ def generate_design_package(target_product: str, demand_text: str, context: dict
             ],
         },
     }
-
