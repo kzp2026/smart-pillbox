@@ -82,6 +82,42 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
         self.assertEqual(package["quality_status"], "需补充证据")
         self.assertIn("当前知识库证据不足", package["quality_report"]["warnings"][0])
 
+    def test_can_update_and_delete_product_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "kb.sqlite3"
+            kb = ProductKnowledgeBase(f"sqlite:///{db_path}")
+            kb.initialize()
+
+            product_id, batch_id = kb.ingest_comment_batch(
+                product_name="Codex持久化验证",
+                category="系统验证",
+                source_filename="test.csv",
+                comments=["这是一条用于确认云数据库持久化写入成功的验证评论。"],
+            )
+            kb.add_requirement(
+                product_id=product_id,
+                batch_id=batch_id,
+                title="验证需求",
+                description="用于测试产品管理。",
+                keywords=["验证"],
+                evidence_text="验证评论",
+                score=60,
+            )
+
+            self.assertTrue(kb.update_product(product_id, "智能药盒", "适老健康", "正式产品"))
+            products = kb.list_products()
+            self.assertEqual(products[0]["name"], "智能药盒")
+            self.assertEqual(products[0]["category"], "适老健康")
+
+            kb.upsert_product("保温杯", "厨房电器")
+            with self.assertRaises(ValueError):
+                kb.update_product(product_id, "保温杯", "适老健康")
+
+            self.assertTrue(kb.delete_product(product_id))
+            context = kb.search_context("智能药盒 验证", limit=5)
+            self.assertEqual(context["evidence_count"], 0)
+            self.assertFalse(any(product["name"] == "智能药盒" for product in kb.list_products()))
+
 
 if __name__ == "__main__":
     unittest.main()
