@@ -220,7 +220,7 @@ class ProductKnowledgeBase:
         comments: list[str],
     ) -> tuple[int, int]:
         product_id = self.upsert_product(product_name, category=category)
-        cleaned = [clean_text(comment) for comment in comments if clean_text(comment)]
+        cleaned = [text for text in (clean_text(comment) for comment in comments) if text]
         now = utc_now()
         with self.connect() as conn:
             cursor = conn.execute(
@@ -231,11 +231,11 @@ class ProductKnowledgeBase:
                 (self.owner_id, product_id, source_filename or "", len(cleaned), now),
             )
             batch_id = self._lastrowid(cursor, conn)
-            for comment in cleaned:
-                self._execute_ignore(
-                    conn,
-                    "INSERT INTO comments (owner_id, product_id, batch_id, comment_original, clean_comment, fingerprint, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            self._executemany_ignore(
+                conn,
+                "INSERT INTO comments (owner_id, product_id, batch_id, comment_original, clean_comment, fingerprint, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
                     (
                         self.owner_id,
                         product_id,
@@ -244,8 +244,10 @@ class ProductKnowledgeBase:
                         comment,
                         text_fingerprint(comment),
                         now,
-                    ),
-                )
+                    )
+                    for comment in cleaned
+                ],
+            )
         return product_id, batch_id
 
     def add_requirement(
@@ -430,6 +432,19 @@ class ProductKnowledgeBase:
         else:
             statement = statement.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
         conn.execute(self._sql(statement), params)
+
+    def _executemany_ignore(self, conn, statement: str, params_list: list[tuple]) -> None:
+        if not params_list:
+            return
+        if self.info.driver == "postgres":
+            statement = statement + " ON CONFLICT DO NOTHING"
+        else:
+            statement = statement.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
+        if hasattr(conn, "executemany"):
+            conn.executemany(self._sql(statement), params_list)
+        else:
+            with conn.cursor() as cursor:
+                cursor.executemany(self._sql(statement), params_list)
 
     def _fetchone(self, conn, statement: str, params: tuple) -> dict | None:
         cursor = conn.execute(self._sql(statement), params)
