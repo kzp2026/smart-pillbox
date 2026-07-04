@@ -42,6 +42,7 @@ output/runs/
 output/knowledge_runs/
 output/_test_*.csv
 output/ui-cloud-studio-*.png
+output/product-admin-*.png
 data/product_knowledge_base.sqlite3
 data/product_knowledge_base.sqlite3-*
 
