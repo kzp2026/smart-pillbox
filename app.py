@@ -667,9 +667,82 @@ def render_cloud_studio_overview(products: list[dict], database_url: str, dashsc
     )
 
 
+def render_main_result_preview(
+    package: dict | None,
+    context: dict | None,
+    dashscope_api_key: str,
+    image_model: str,
+    button_key: str = "main_result_preview_render",
+) -> None:
+    st.header("结果预览")
+
+    if not package:
+        st.info("还没有本次生成结果。请先进入“需求生成”生成一个方案。")
+        st.caption("生成后这里会固定展示设计方案、生图提示词和效果图预览。")
+        return
+
+    left, right = st.columns([0.6, 0.4])
+    with left:
+        st.subheader("设计方案预览")
+        st.markdown(package.get("design_text", ""))
+        with st.expander("查看引用证据和合理性检查", expanded=False):
+            render_quality_report(package)
+            if context:
+                evidence_rows = []
+                for item in context.get("requirements", [])[:5]:
+                    evidence_rows.append({"类型": "需求", "来源产品": item.get("product_name", ""), "内容": item.get("title", ""), "证据": item.get("evidence_text", "")})
+                for item in context.get("comments", [])[:5]:
+                    evidence_rows.append({"类型": "评论", "来源产品": item.get("product_name", ""), "内容": item.get("comment_original", ""), "证据": ""})
+                st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
+
+    with right:
+        st.subheader("生图提示词")
+        st.code(package.get("image_prompt_text", ""), language="text")
+        st.subheader("效果图预览")
+        image_path_text = st.session_state.get("latest_image_path", "")
+        image_path = Path(image_path_text) if image_path_text else None
+        if image_path and image_path.exists():
+            st.image(str(image_path), caption=image_path.name, use_container_width=True)
+            st.download_button(
+                "下载效果图",
+                data=image_path.read_bytes(),
+                file_name=image_path.name,
+                mime="image/png",
+                use_container_width=True,
+                key=f"{button_key}_download",
+            )
+        else:
+            st.info("还没有效果图。可以直接用下方阿里云入口生成，或复制提示词到其他生图工具。")
+
+        if st.button("用阿里云百炼生成效果图", use_container_width=True, disabled=not dashscope_api_key, key=button_key):
+            with st.spinner("正在调用阿里云百炼生成效果图..."):
+                generated_image_path = generate_dashscope_render(
+                    package.get("image_prompt_text", ""),
+                    package.get("target_product", "product"),
+                    dashscope_api_key,
+                    image_model,
+                )
+            if generated_image_path:
+                st.session_state["latest_image_path"] = str(generated_image_path)
+                st.image(str(generated_image_path), caption=generated_image_path.name, use_container_width=True)
+                st.download_button(
+                    "下载效果图",
+                    data=generated_image_path.read_bytes(),
+                    file_name=generated_image_path.name,
+                    mime="image/png",
+                    use_container_width=True,
+                    key=f"{button_key}_new_download",
+                )
+            else:
+                st.error("效果图生成失败，请检查百炼模型权限、余额、Key 或网络。提示词已保留，可复制到图像模型手动生成。")
+        elif not dashscope_api_key:
+            st.caption("填写阿里云百炼 Key 后可在这里直接生成效果图。")
+
+
 st.set_page_config(page_title="产品评论知识库智能体", page_icon="🧠", layout="wide")
 inject_cloud_studio_theme()
 database_url = get_database_url()
+st.session_state.setdefault("dashscope_api_key_shared", "")
 
 with st.sidebar:
     st.title("🧠 知识库控制台")
@@ -688,7 +761,7 @@ with st.sidebar:
     runtime_dashscope_key = st.text_input(
         "阿里云百炼 API Key",
         type="password",
-        value="",
+        key="dashscope_api_key_shared",
         placeholder="sk-...",
         help="仅当前会话使用，不写入代码。也可在 Secrets 配置 DASHSCOPE_API_KEY。",
     )
@@ -708,12 +781,14 @@ render_cloud_studio_overview(products, database_url, bool(configured_dashscope_k
 (
     tab_import,
     tab_generate,
+    tab_result,
     tab_library,
     tab_downloads,
     tab_legacy,
 ) = st.tabs([
     "导入评论资产",
     "需求生成",
+    "结果预览",
     "知识库概览",
     "📥 下载中心",
     "旧版结果",
@@ -746,7 +821,8 @@ with tab_import:
         uploaded = st.file_uploader("上传评论数据", type=["xlsx", "xls", "csv"])
         if uploaded is not None:
             try:
-                uploaded_df = load_uploaded_table(uploaded)
+                with st.spinner("正在读取并解析上传文件..."):
+                    uploaded_df = load_uploaded_table(uploaded)
                 column_options = candidate_comment_columns(uploaded_df)
                 suggested_col = default_comment_column(uploaded_df)
                 selected_comment_col = st.selectbox(
@@ -775,22 +851,23 @@ with tab_import:
         if not preview_comments:
             st.error("没有可导入的评论。")
         else:
-            progress = st.progress(0)
-            status = st.empty()
-            status.write("1/4 正在校验评论列和有效评论...")
-            progress.progress(15)
-            status.write("2/4 正在写入云数据库...")
-            report = kb.ingest_comment_batch_with_report(product_name, category, uploaded.name, preview_comments)
-            progress.progress(65)
-            status.write("3/4 正在抽取基础需求证据...")
-            requirement_count = derive_requirements_from_comments(int(report["product_id"]), int(report["batch_id"]), preview_comments, kb)
-            progress.progress(90)
-            status.write("4/4 正在刷新知识库概览...")
-            report["requirement_count"] = requirement_count
-            report["selected_comment_column"] = selected_comment_col
-            st.session_state["latest_import_report"] = report
-            st.cache_resource.clear()
-            progress.progress(100)
+            with st.status("正在导入评论资产...", expanded=True) as import_status:
+                progress = st.progress(0)
+                st.write("1/4 正在校验评论列和有效评论...")
+                progress.progress(15)
+                with st.spinner("正在写入云数据库..."):
+                    report = kb.ingest_comment_batch_with_report(product_name, category, uploaded.name, preview_comments)
+                progress.progress(65)
+                with st.spinner("正在抽取基础需求证据..."):
+                    requirement_count = derive_requirements_from_comments(int(report["product_id"]), int(report["batch_id"]), preview_comments, kb)
+                progress.progress(90)
+                st.write("4/4 正在刷新知识库概览...")
+                report["requirement_count"] = requirement_count
+                report["selected_comment_column"] = selected_comment_col
+                st.session_state["latest_import_report"] = report
+                st.cache_resource.clear()
+                progress.progress(100)
+                import_status.update(label="评论资产导入完成", state="complete", expanded=False)
             st.rerun()
 
 with tab_generate:
@@ -800,10 +877,11 @@ with tab_generate:
     generate_clicked = st.button("从知识库生成方案", type="primary", use_container_width=True, disabled=not target_product.strip())
 
     if generate_clicked:
-        query = f"{target_product} {demand_text}"
-        context = kb.search_context(query, limit=8)
-        package = generate_design_package(target_product, demand_text, context)
-        run_id = kb.save_generation_run(target_product, demand_text, context, package)
+        with st.spinner("正在检索知识库并生成方案..."):
+            query = f"{target_product} {demand_text}"
+            context = kb.search_context(query, limit=8)
+            package = generate_design_package(target_product, demand_text, context)
+            run_id = kb.save_generation_run(target_product, demand_text, context, package)
         st.session_state["latest_generation"] = package
         st.session_state["latest_context"] = context
         st.session_state["latest_run_id"] = run_id
@@ -834,12 +912,21 @@ with tab_generate:
                 with st.spinner("正在调用 DashScope 生成写实效果图..."):
                     image_path = generate_dashscope_render(package["image_prompt_text"], package["target_product"], configured_dashscope_key, image_model)
                 if image_path:
+                    st.session_state["latest_image_path"] = str(image_path)
                     st.image(str(image_path), use_container_width=True)
                     st.download_button("下载写实效果图", data=image_path.read_bytes(), file_name=image_path.name, mime="image/png", use_container_width=True)
                 else:
                     st.error("写实渲染失败，请检查百炼模型权限、余额、Key 或网络。提示词已保留，可复制到图像模型手动生成。")
             elif not configured_dashscope_key:
                 st.caption("填写阿里云百炼 Key 后可在这里直接生成写实效果图。")
+
+with tab_result:
+    render_main_result_preview(
+        st.session_state.get("latest_generation"),
+        st.session_state.get("latest_context"),
+        configured_dashscope_key,
+        image_model,
+    )
 
 with tab_library:
     st.header("知识库概览")
