@@ -32,6 +32,7 @@ class AppTabsTests(unittest.TestCase):
             "效果图预览",
             "latest_image_path",
             "render_main_result_preview",
+            "运行版本",
         ]:
             self.assertIn(snippet, app_source)
 

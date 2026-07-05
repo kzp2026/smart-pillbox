@@ -24,6 +24,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
+APP_VERSION = "2026-07-05-json-fallback-v2"
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
     "qwen-image-2.0-pro",
@@ -746,6 +747,7 @@ st.session_state.setdefault("dashscope_api_key_shared", "")
 
 with st.sidebar:
     st.title("🧠 知识库控制台")
+    st.caption(f"运行版本：{APP_VERSION}")
     owner_id = st.text_input("私人库 ID", value="private", help="当前先给你个人使用；后期共享时可扩展为登录用户 ID。")
     if database_url.startswith("sqlite"):
         st.info(f"当前使用本地 SQLite：{DEFAULT_DB_PATH.name}")
