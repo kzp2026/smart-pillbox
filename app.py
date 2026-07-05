@@ -28,7 +28,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-05-visual-assets-v1"
+APP_VERSION = "2026-07-05-visual-assets-v2"
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
     "qwen-image-2.0-pro",
@@ -191,19 +191,52 @@ def generate_dashscope_render(
     return output_path if ok and output_path.exists() else None
 
 
+def package_visual_identity_lock(package: dict) -> str:
+    product_name = str(package.get("target_product") or "product")
+    demand_text = str(package.get("demand_text") or product_name)
+    guard = (
+        "固定为同一款智能分格药盒：圆角矩形盒体、半透明或透明上盖、清晰药格、前置提醒屏或指示灯、药片分区明确；"
+        "不得生成耳机盒、充电盒、蓝牙耳机、化妆盒、首饰盒、普通收纳盒或多方案拼贴。"
+        if "药盒" in product_name
+        else f"固定为同一款{product_name}，不得生成其他品类、替代产品、多方案拼贴或无关对象。"
+    )
+    return (
+        f"统一产品设计锁定：所有六张图片必须表现同一款“{product_name}”，只能改变镜头视角、拆解方式、展板排版和使用场景，"
+        "不得改变产品本体；保持同一轮廓、同一主色、同一材料质感、同一关键部件数量、同一尺寸比例、同一操作区域。"
+        f"目标需求：{demand_text}。负向约束：{guard} "
+        "photorealistic industrial design visualization, no logo, no watermark, no collage, no contact sheet, no unrelated object."
+    )
+
+
+def build_visual_assets_from_package(package: dict) -> list[dict]:
+    product_name = str(package.get("target_product") or "product")
+    identity_lock = package_visual_identity_lock(package)
+    templates = [
+        ("render", "产品效果图", "1024x1024", "专业产品效果图，45度主视角，单一产品主体，白色或浅灰干净背景，真实PBR材质、圆角、阴影、高光和核心交互区清晰可见。"),
+        ("exploded", "产品爆炸图", "1024x1792", "单张完整爆炸图，沿中心垂直装配轴从上到下分层悬浮，展示外壳、功能模块、内部空间、连接件、可维护部件和装配关系；不是多宫格，不是拼贴图，不是另一款产品。"),
+        ("detail", "产品细节图", "1024x1024", "产品细节特写图，只放大同一款产品上的关键结构、材质、开启方式、按键、屏幕、提示灯或连接细节，微距摄影质感。"),
+        ("three_view", "产品三视图", "1792x1024", "工业设计三视图，同一产品以统一比例展示正视图、侧视图和俯视图，严格对齐，白色背景，无透视变形，适合工程表达。"),
+        ("board", "设计展板", "1600x2200", "设计展板，整合产品效果图、爆炸图、细节图、三视图、使用效果图、需求分析和功能结构映射；信息层级清晰，少文字，多图像，适合论文和开题展示。"),
+        ("usage", "产品使用效果图", "1024x1024", "真实使用场景图，目标用户在自然生活环境中使用同一款产品，人物动作、产品尺度、空间关系和核心功能表达真实合理。"),
+    ]
+    return [
+        {
+            "key": key,
+            "label": label,
+            "size": size,
+            "prompt": f"{identity_lock}\n\n图像任务 {index}：{label}。{prompt} 产品名称必须明确是{product_name}，画面只服务于当前这一款产品。",
+        }
+        for index, (key, label, size, prompt) in enumerate(templates, start=1)
+    ]
+
+
 def get_visual_assets(package: dict | None) -> list[dict]:
     if not package:
         return []
     visual_assets = package.get("visual_assets") or []
     if visual_assets:
         return [asset for asset in visual_assets if str(asset.get("prompt", "")).strip()][:6]
-    labels = ["产品效果图", "产品爆炸图", "产品细节图", "产品三视图", "设计展板", "产品使用效果图"]
-    keys = ["render", "exploded", "detail", "three_view", "board", "usage"]
-    sizes = ["1024x1024", "1024x1792", "1024x1024", "1792x1024", "1600x2200", "1024x1024"]
-    return [
-        {"key": keys[index], "label": labels[index], "size": sizes[index], "prompt": prompt}
-        for index, prompt in enumerate(get_image_prompts(package)[:6])
-    ]
+    return build_visual_assets_from_package(package)
 
 
 def get_image_prompts(package: dict | None) -> list[str]:
