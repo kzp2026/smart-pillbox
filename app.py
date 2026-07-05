@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import math
 import os
 import sys
+from datetime import date, datetime, time
+from decimal import Decimal
 from html import escape
 from pathlib import Path
 
@@ -24,7 +28,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-05-json-fallback-v2"
+APP_VERSION = "2026-07-05-json-fallback-v3"
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
     "qwen-image-2.0-pro",
@@ -44,6 +48,30 @@ def get_secret(name: str, default: str = "") -> str:
 
 def get_database_url() -> str:
     return get_secret("PRODUCT_KB_DATABASE_URL") or get_secret("DATABASE_URL") or normalize_database_url()
+
+
+def safe_generation_payload(value: object) -> object:
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(key): safe_generation_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [safe_generation_payload(item) for item in value]
+    return str(value)
+
+
+def as_plain_json(value: object) -> object:
+    return json.loads(json.dumps(safe_generation_payload(value), ensure_ascii=False, default=str))
 
 
 @st.cache_resource(show_spinner=False)
@@ -883,7 +911,13 @@ with tab_generate:
             query = f"{target_product} {demand_text}"
             context = kb.search_context(query, limit=8)
             package = generate_design_package(target_product, demand_text, context)
-            run_id = kb.save_generation_run(target_product, demand_text, context, package)
+            context = as_plain_json(context)
+            package = as_plain_json(package)
+            try:
+                run_id = kb.save_generation_run(target_product, demand_text, context, package)
+            except Exception as exc:
+                st.warning(f"生成结果已展示，但生成记录保存失败：{exc}")
+                run_id = 0
         st.session_state["latest_generation"] = package
         st.session_state["latest_context"] = context
         st.session_state["latest_run_id"] = run_id

@@ -33,6 +33,8 @@ class AppTabsTests(unittest.TestCase):
             "latest_image_path",
             "render_main_result_preview",
             "运行版本",
+            "safe_generation_payload",
+            "生成记录保存失败",
         ]:
             self.assertIn(snippet, app_source)
 
