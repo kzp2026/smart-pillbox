@@ -28,7 +28,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-05-six-prompts-v1"
+APP_VERSION = "2026-07-05-six-prompts-v2"
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
     "qwen-image-2.0-pro",
@@ -231,8 +231,8 @@ def render_prompt_gallery(package: dict, dashscope_api_key: str, image_model: st
     st.subheader("prompt")
     if prompts:
         for index, prompt in enumerate(prompts, start=1):
-            with st.expander(f"prompt {index}", expanded=index == 1):
-                st.code(prompt, language="text")
+            st.markdown(f"**prompt {index}**")
+            st.code(prompt, language="text")
     else:
         st.info("当前方案还没有 prompt。")
 
