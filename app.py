@@ -28,7 +28,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-05-six-prompts-v2"
+APP_VERSION = "2026-07-05-visual-assets-v1"
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
     "qwen-image-2.0-pro",
@@ -158,22 +158,52 @@ def build_dashscope_config(api_key: str, model: str) -> dict:
     }
 
 
-def generate_dashscope_render(prompt: str, target_product: str, api_key: str, model: str, image_index: int = 1) -> Path | None:
-    if not api_key:
-        return None
-    module = load_design_visuals_module()
+def visual_asset_output_path(target_product: str, asset: dict, image_index: int) -> Path:
     safe_name = "".join(char if char.isalnum() or "\u4e00" <= char <= "\u9fff" else "_" for char in target_product)[:40] or "product"
     image_dir = OUTPUT_DIR / "dashscope_images"
     image_dir.mkdir(parents=True, exist_ok=True)
-    output_path = image_dir / f"{safe_name}_效果图_{image_index:02d}.png"
+    asset_key = str(asset.get("key") or f"image_{image_index:02d}")
+    asset_label = str(asset.get("label") or f"效果图{image_index}")
+    return image_dir / f"{safe_name}_{image_index:02d}_{asset_key}_{asset_label}.png"
+
+
+def generate_dashscope_render(
+    prompt: str,
+    target_product: str,
+    api_key: str,
+    model: str,
+    image_index: int = 1,
+    asset: dict | None = None,
+    reference_image: Path | None = None,
+) -> Path | None:
+    if not api_key:
+        return None
+    module = load_design_visuals_module()
+    asset = asset or {"key": f"image_{image_index:02d}", "label": f"效果图{image_index}", "size": "1024x1024"}
+    output_path = visual_asset_output_path(target_product, asset, image_index)
     ok = module.generate_ai_image(
         prompt,
         output_path,
-        size="1024x1024",
-        reference_path=None,
+        size=str(asset.get("size") or "1024x1024"),
+        reference_path=reference_image,
         config=build_dashscope_config(api_key, model),
     )
     return output_path if ok and output_path.exists() else None
+
+
+def get_visual_assets(package: dict | None) -> list[dict]:
+    if not package:
+        return []
+    visual_assets = package.get("visual_assets") or []
+    if visual_assets:
+        return [asset for asset in visual_assets if str(asset.get("prompt", "")).strip()][:6]
+    labels = ["产品效果图", "产品爆炸图", "产品细节图", "产品三视图", "设计展板", "产品使用效果图"]
+    keys = ["render", "exploded", "detail", "three_view", "board", "usage"]
+    sizes = ["1024x1024", "1024x1792", "1024x1024", "1792x1024", "1600x2200", "1024x1024"]
+    return [
+        {"key": keys[index], "label": labels[index], "size": sizes[index], "prompt": prompt}
+        for index, prompt in enumerate(get_image_prompts(package)[:6])
+    ]
 
 
 def get_image_prompts(package: dict | None) -> list[str]:
@@ -183,6 +213,103 @@ def get_image_prompts(package: dict | None) -> list[str]:
     if not prompts and package.get("image_prompt_text"):
         prompts = [package["image_prompt_text"]]
     return [str(prompt).strip() for prompt in prompts if str(prompt).strip()][:6]
+
+
+def package_visual_frames(package: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    report = package.get("quality_report", {}) if isinstance(package, dict) else {}
+    checks = report.get("checks", []) if isinstance(report, dict) else []
+    req_df = pd.DataFrame(
+        [
+            {
+                "需求主题": str(package.get("demand_text") or package.get("target_product") or "产品需求"),
+                "需求描述": str(package.get("demand_text") or ""),
+                "来源关键词": "、".join(str(item) for item in checks[:4]),
+            }
+        ]
+    )
+    topic_df = pd.DataFrame([{"主题关键词": "、".join(str(item) for item in checks[:6])}])
+    return req_df, topic_df
+
+
+def create_visual_fallback(module, package: dict, asset: dict, output_path: Path, generated_paths: dict[str, Path]) -> None:
+    product_name = str(package.get("target_product") or "product")
+    req_df, topic_df = package_visual_frames(package)
+    empty_struct = pd.DataFrame()
+    key = str(asset.get("key") or "")
+    label = str(asset.get("label") or "效果图")
+    if key == "render":
+        module.create_product_identity_reference_image(output_path, product_name)
+    elif key == "exploded":
+        module.create_exploded_schematic(output_path, product_name, empty_struct)
+    elif key == "three_view":
+        module.create_three_view_placeholder(output_path, product_name)
+    elif key == "board":
+        images = {
+            "render": generated_paths.get("render", output_path),
+            "exploded": generated_paths.get("exploded", output_path),
+            "detail": generated_paths.get("detail", generated_paths.get("render", output_path)),
+            "three_view": generated_paths.get("three_view", output_path),
+            "usage": generated_paths.get("usage", generated_paths.get("render", output_path)),
+            "board": output_path,
+        }
+        module.create_board(output_path, images, req_df, topic_df, product_name)
+    else:
+        module.create_simple_placeholder(output_path, f"{product_name} {label}")
+
+
+def generate_visual_asset_set(
+    package: dict,
+    api_key: str,
+    model: str,
+    progress,
+    status,
+) -> list[Path]:
+    module = load_design_visuals_module()
+    assets = get_visual_assets(package)
+    product_name = str(package.get("target_product") or "product")
+    generated_paths: dict[str, Path] = {}
+    reference_image: Path | None = None
+    board_asset: tuple[int, dict] | None = None
+    for index, asset in enumerate(assets, start=1):
+        key = str(asset.get("key") or "")
+        label = str(asset.get("label") or f"效果图{index}")
+        output_path = visual_asset_output_path(product_name, asset, index)
+        status.write(f"正在生成第 {index}/{len(assets)} 张：{label}...")
+        if key == "exploded":
+            create_visual_fallback(module, package, asset, output_path, generated_paths)
+        elif key == "board":
+            board_asset = (index, asset)
+            progress.progress(int(index / max(len(assets), 1) * 100))
+            continue
+        else:
+            generated_image_path = generate_dashscope_render(
+                str(asset.get("prompt", "")),
+                product_name,
+                api_key,
+                model,
+                index,
+                asset=asset,
+                reference_image=reference_image,
+            )
+            if generated_image_path:
+                output_path = generated_image_path
+            else:
+                create_visual_fallback(module, package, asset, output_path, generated_paths)
+        if output_path.exists():
+            generated_paths[key or f"image_{index}"] = output_path
+            if key == "render":
+                reference_image = output_path
+        progress.progress(int(index / max(len(assets), 1) * 100))
+    if board_asset:
+        index, asset = board_asset
+        label = str(asset.get("label") or "设计展板")
+        status.write(f"正在合成第 {index}/{len(assets)} 张：{label}...")
+        output_path = visual_asset_output_path(product_name, asset, index)
+        create_visual_fallback(module, package, asset, output_path, generated_paths)
+        if output_path.exists():
+            generated_paths[str(asset.get("key") or "board")] = output_path
+        progress.progress(100)
+    return [generated_paths[str(asset.get("key") or f"image_{index}")] for index, asset in enumerate(assets, start=1) if str(asset.get("key") or f"image_{index}") in generated_paths]
 
 
 def get_latest_image_paths() -> list[Path]:
@@ -201,23 +328,24 @@ def get_latest_image_paths() -> list[Path]:
 
 
 def store_latest_image_paths(paths: list[Path]) -> None:
-    existing = [str(path) for path in get_latest_image_paths()]
-    merged = existing + [str(path) for path in paths if str(path) not in existing]
-    st.session_state["latest_image_paths"] = merged[:6]
-    if merged:
-        st.session_state["latest_image_path"] = merged[0]
+    current = [str(path) for path in paths[:6] if path.exists()]
+    st.session_state["latest_image_paths"] = current
+    if current:
+        st.session_state["latest_image_path"] = current[0]
 
 
-def render_image_download_grid(image_paths: list[Path], key_prefix: str) -> None:
+def render_image_download_grid(image_paths: list[Path], key_prefix: str, assets: list[dict] | None = None) -> None:
     if not image_paths:
         st.info("还没有效果图。可以用阿里云百炼生成 6 张效果图，或复制 prompt 到其他生图工具。")
         return
+    assets = assets or []
     columns = st.columns(3)
     for index, image_path in enumerate(image_paths[:6], start=1):
+        label = str(assets[index - 1].get("label")) if index - 1 < len(assets) else f"效果图 {index}"
         with columns[(index - 1) % 3]:
-            st.image(str(image_path), caption=f"效果图 {index}", use_container_width=True)
+            st.image(str(image_path), caption=label, use_container_width=True)
             st.download_button(
-                f"下载本次效果图 {index}",
+                f"下载本次效果图：{label}",
                 data=image_path.read_bytes(),
                 file_name=image_path.name,
                 mime="image/png",
@@ -227,38 +355,28 @@ def render_image_download_grid(image_paths: list[Path], key_prefix: str) -> None
 
 
 def render_prompt_gallery(package: dict, dashscope_api_key: str, image_model: str, button_key: str) -> None:
-    prompts = get_image_prompts(package)
+    assets = get_visual_assets(package)
+    prompts = [str(asset.get("prompt", "")).strip() for asset in assets if str(asset.get("prompt", "")).strip()]
     st.subheader("prompt")
-    if prompts:
-        for index, prompt in enumerate(prompts, start=1):
-            st.markdown(f"**prompt {index}**")
+    if assets:
+        for index, asset in enumerate(assets, start=1):
+            st.markdown(f"**prompt {index} · {asset.get('label', '效果图')}**")
+            prompt = str(asset.get("prompt", "")).strip()
             st.code(prompt, language="text")
     else:
         st.info("当前方案还没有 prompt。")
 
     st.subheader("效果图预览")
-    render_image_download_grid(get_latest_image_paths(), button_key)
+    render_image_download_grid(get_latest_image_paths(), button_key, assets)
 
     if st.button(f"用阿里云百炼生成 {len(prompts) or 6} 张效果图", use_container_width=True, disabled=not dashscope_api_key or not prompts, key=button_key):
-        generated_paths: list[Path] = []
         progress = st.progress(0)
         status = st.empty()
-        for index, prompt in enumerate(prompts, start=1):
-            status.write(f"正在生成第 {index}/{len(prompts)} 张效果图...")
-            generated_image_path = generate_dashscope_render(
-                prompt,
-                package.get("target_product", "product"),
-                dashscope_api_key,
-                image_model,
-                index,
-            )
-            if generated_image_path:
-                generated_paths.append(generated_image_path)
-            progress.progress(int(index / len(prompts) * 100))
+        generated_paths = generate_visual_asset_set(package, dashscope_api_key, image_model, progress, status)
         if generated_paths:
             store_latest_image_paths(generated_paths)
-            st.success(f"已生成 {len(generated_paths)} 张效果图。")
-            render_image_download_grid(get_latest_image_paths(), f"{button_key}_generated")
+            st.success(f"已生成并补齐 {len(generated_paths)} 张设计图片。")
+            render_image_download_grid(get_latest_image_paths(), f"{button_key}_generated", assets)
         else:
             st.error("效果图生成失败，请检查百炼模型权限、余额、Key 或网络。prompt 已保留，可复制到图像模型手动生成。")
     elif not dashscope_api_key:
@@ -1083,6 +1201,7 @@ with tab_downloads:
     package = st.session_state.get("latest_generation")
     current_image_paths = get_latest_image_paths()
     if package:
+        current_assets = get_visual_assets(package)
         st.subheader("本次生成")
         st.download_button(
             "下载本次设计方案",
@@ -1092,7 +1211,10 @@ with tab_downloads:
             use_container_width=True,
             key="download_current_design_text",
         )
-        prompt_text = "\n\n".join(f"prompt {index}\n{prompt}" for index, prompt in enumerate(get_image_prompts(package), start=1))
+        prompt_text = "\n\n".join(
+            f"prompt {index} · {asset.get('label', '效果图')}\n{asset.get('prompt', '')}"
+            for index, asset in enumerate(current_assets, start=1)
+        )
         st.download_button(
             "下载本次生成 prompt",
             data=prompt_text.encode("utf-8"),
@@ -1101,7 +1223,7 @@ with tab_downloads:
             use_container_width=True,
             key="download_current_prompts",
         )
-        render_image_download_grid(current_image_paths, "download_center_current")
+        render_image_download_grid(current_image_paths, "download_center_current", current_assets)
         st.divider()
 
     download_files = [

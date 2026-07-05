@@ -156,6 +156,19 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
         self.assertIn("智能水杯", package["image_prompt_text"])
         self.assertEqual(len(package["image_prompts"]), 6)
         self.assertTrue(all("智能水杯" in prompt for prompt in package["image_prompts"]))
+        visual_assets = package["visual_assets"]
+        self.assertEqual(
+            [asset["key"] for asset in visual_assets],
+            ["render", "exploded", "detail", "three_view", "board", "usage"],
+        )
+        self.assertEqual(
+            [asset["label"] for asset in visual_assets],
+            ["产品效果图", "产品爆炸图", "产品细节图", "产品三视图", "设计展板", "产品使用效果图"],
+        )
+        self.assertTrue(all("统一产品设计锁定" in asset["prompt"] for asset in visual_assets))
+        self.assertIn("单张完整爆炸图", visual_assets[1]["prompt"])
+        self.assertIn("设计展板", visual_assets[4]["prompt"])
+        self.assertIn("真实使用场景", visual_assets[5]["prompt"])
 
     def test_generation_marks_low_evidence_as_needing_review(self) -> None:
         package = generate_design_package(
