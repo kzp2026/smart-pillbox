@@ -584,13 +584,26 @@ def generate_design_package(target_product: str, demand_text: str, context: dict
 本方案已保留历史评论证据链。后续生成效果图时，应保持同一产品主体、同一结构语言和同一用户场景，避免生成与目标产品无关的外观。
 """
 
-    image_prompt_text = (
+    requirement_text = "；".join(str(item.get("title", "")) for item in requirements[:4])
+    evidence_text = "；".join(str(item.get("comment_original", "")) for item in comments[:3])
+    prompt_base = (
         f"写实工业设计渲染图，单一产品主体：{target_product}。"
         f"目标需求：{demand_text}。"
         "设计必须体现历史评论证据中的核心痛点，保持真实可制造结构，避免多方案拼贴、海报文字、水印和无关产品。"
     )
     if requirements:
-        image_prompt_text += " 关键需求：" + "；".join(str(item.get("title", "")) for item in requirements[:4])
+        prompt_base += " 关键需求：" + requirement_text
+    image_prompts = [
+        prompt_base + " 视角：45度产品主视觉，白色干净背景，能清楚看见整体造型、主交互区和主要功能分区。",
+        prompt_base + f" 场景：家庭桌面使用场景，体现目标用户正在使用{target_product}，环境真实克制，突出操作便利性和提醒反馈。",
+        prompt_base + " 细节：近景特写，突出材料、开合结构、分区、按键或屏幕交互细节，展示可制造的结构逻辑。",
+        prompt_base + " CMF方案：展示颜色、材料、表面纹理和品牌质感，强调耐用、易清洁、亲和但不幼稚的产品语言。",
+        prompt_base + " 交互界面：聚焦屏幕、按键、灯光、声音提示或App联动反馈，画面要能表达用户如何确认任务完成。",
+        prompt_base + " 结构爆炸图风格的写实渲染，展示核心模块、内部空间、可维护部件和装配关系，仍保持真实工业设计表达。",
+    ]
+    if evidence_text:
+        image_prompts[1] += " 评论证据线索：" + evidence_text[:160]
+    image_prompt_text = image_prompts[0]
 
     score = 45
     score += min(evidence_count * 12, 30)
@@ -603,6 +616,7 @@ def generate_design_package(target_product: str, demand_text: str, context: dict
         "demand_text": demand_text,
         "design_text": design_text,
         "image_prompt_text": image_prompt_text,
+        "image_prompts": image_prompts,
         "quality_score": score,
         "quality_status": status,
         "quality_report": {

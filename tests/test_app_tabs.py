@@ -28,15 +28,20 @@ class AppTabsTests(unittest.TestCase):
             "正在导入评论资产",
             "正在检索知识库并生成方案",
             "设计方案预览",
-            "生图提示词",
+            '"prompt"',
             "效果图预览",
-            "latest_image_path",
+            "latest_image_paths",
+            "get_image_prompts",
+            "render_prompt_gallery",
+            "下载本次生成 prompt",
+            "下载本次效果图",
             "render_main_result_preview",
             "运行版本",
             "safe_generation_payload",
             "生成记录保存失败",
         ]:
             self.assertIn(snippet, app_source)
+        self.assertNotIn("生图提示词", app_source)
 
     def test_legacy_result_page_keeps_legacy_stage_tabs_visible(self) -> None:
         page_source = (ROOT_DIR / "pages" / "03_旧版结果预览.py").read_text(encoding="utf-8")

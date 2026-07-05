@@ -154,6 +154,8 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
         self.assertIn("评论证据", package["design_text"])
         self.assertIn("定时提醒", package["design_text"])
         self.assertIn("智能水杯", package["image_prompt_text"])
+        self.assertEqual(len(package["image_prompts"]), 6)
+        self.assertTrue(all("智能水杯" in prompt for prompt in package["image_prompts"]))
 
     def test_generation_marks_low_evidence_as_needing_review(self) -> None:
         package = generate_design_package(
