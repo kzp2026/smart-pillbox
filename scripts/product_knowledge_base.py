@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterator
@@ -25,7 +26,7 @@ def utc_now() -> str:
 
 
 def clean_text(value: object) -> str:
-    text = str(value or "")
+    text = "" if value is None else str(value)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -35,17 +36,23 @@ def text_fingerprint(value: str) -> str:
 
 
 def to_json_safe(value: object) -> object:
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, dict):
         return {str(key): to_json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, (list, tuple, set)):
         return [to_json_safe(item) for item in value]
     if isinstance(value, Decimal):
         return int(value) if value == value.to_integral_value() else float(value)
-    if isinstance(value, datetime):
+    if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     if isinstance(value, Path):
         return str(value)
-    return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def tokenize(text: str) -> list[str]:

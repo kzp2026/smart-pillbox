@@ -1,15 +1,47 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.product_knowledge_base import ProductKnowledgeBase, generate_design_package
+from scripts.product_knowledge_base import ProductKnowledgeBase, clean_text, generate_design_package, to_json_safe
 
 
 class ProductKnowledgeBaseTests(unittest.TestCase):
+    def test_json_safe_conversion_handles_unknown_database_values(self) -> None:
+        class CustomDatabaseValue:
+            def __str__(self) -> str:
+                return "custom-value"
+
+        payload = {
+            "decimal": Decimal("92.5"),
+            "date": date(2026, 7, 5),
+            "time": time(10, 30),
+            "bytes": b"hello",
+            "set": {"提醒", "吃药"},
+            "custom": CustomDatabaseValue(),
+        }
+
+        encoded = json.dumps(to_json_safe(payload), ensure_ascii=False)
+
+        self.assertIn("92.5", encoded)
+        self.assertIn("2026-07-05", encoded)
+        self.assertIn("hello", encoded)
+        self.assertIn("custom-value", encoded)
+
+    def test_clean_text_does_not_boolean_check_database_values(self) -> None:
+        class BoolErrorValue:
+            def __bool__(self) -> bool:
+                raise TypeError("boolean value is ambiguous")
+
+            def __str__(self) -> str:
+                return " 可 清洗 文本 "
+
+        self.assertEqual(clean_text(BoolErrorValue()), "可 清洗 文本")
+
     def test_ingest_report_counts_inserted_and_duplicate_comments(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "kb.sqlite3"
@@ -155,6 +187,35 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
             result = generate_design_package("智能药盒", "提醒老人吃药", context)
 
             run_id = kb.save_generation_run("智能药盒", "提醒老人吃药", context, result)
+
+            self.assertGreater(run_id, 0)
+
+    def test_generation_flow_accepts_database_rows_with_native_types(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "kb.sqlite3"
+            kb = ProductKnowledgeBase(f"sqlite:///{db_path}")
+            kb.initialize()
+            product_id, batch_id = kb.ingest_comment_batch(
+                product_name="智能药盒",
+                category="适老健康",
+                source_filename="comments.csv",
+                comments=["提醒老人吃药，能与手机交互。"],
+            )
+            kb.add_requirement(
+                product_id=product_id,
+                batch_id=batch_id,
+                title="提醒交互",
+                description="提醒要明显，并能把状态同步给家人。",
+                keywords=["提醒", "手机", "交互"],
+                evidence_text="提醒老人吃药，能与手机交互。",
+                score=Decimal("88.5"),
+            )
+
+            context = kb.search_context("智能药盒 提醒 手机交互", limit=5)
+            context["comments"][0]["created_at"] = datetime(2026, 7, 5, 10, 30, tzinfo=timezone.utc)
+            context["comments"][0]["extra"] = {Decimal("1.5"), date(2026, 7, 5)}
+            package = generate_design_package("智能药盒", "提醒老人吃药 能与手机交互", context)
+            run_id = kb.save_generation_run("智能药盒", "提醒老人吃药 能与手机交互", context, package)
 
             self.assertGreater(run_id, 0)
 
