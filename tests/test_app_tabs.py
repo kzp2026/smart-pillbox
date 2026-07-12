@@ -76,6 +76,34 @@ class AppTabsTests(unittest.TestCase):
         self.assertIn("client.images.edit", visual_source)
         self.assertIn("reference_path=reference_path", visual_source)
 
+    def test_main_app_rejects_inconsistent_visual_outputs_before_preview(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+        for snippet in [
+            "evaluate_visual_asset",
+            "MAX_VISUAL_RETRIES",
+            "build_reference_locked_prompt",
+            "未通过视觉一致性验收",
+            "视觉验收未通过",
+            "不展示低质量回退图",
+        ]:
+            self.assertIn(snippet, app_source)
+
+    def test_main_app_exposes_industrial_design_prompt_constraints(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+        for snippet in [
+            "工业设计 Prompt 约束",
+            "功能需求",
+            "产品结构",
+            "材料要求",
+            "尺寸比例约束",
+            "使用场景",
+            "视觉风格",
+            "禁止修改项",
+            "industrial_constraints",
+            "industrial_design_prompt",
+        ]:
+            self.assertIn(snippet, app_source)
+
     def test_legacy_result_page_keeps_legacy_stage_tabs_visible(self) -> None:
         page_source = (ROOT_DIR / "pages" / "03_旧版结果预览.py").read_text(encoding="utf-8")
         for label in [

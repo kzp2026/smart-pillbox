@@ -67,6 +67,32 @@ class RenderProviderAndArchiveTests(unittest.TestCase):
             self.assertEqual(output_path.read_bytes(), b"PNG")
             self.assertEqual(len(requests), 1)
 
+    def test_strict_reference_mode_never_falls_back_to_text_only_generation(self) -> None:
+        module = load_design_visuals_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_path = root / "output.png"
+            reference_path = root / "reference.png"
+            reference_path.write_bytes(b"PNG")
+            config = {
+                "provider": "dashscope",
+                "api_key": "test-key",
+                "model": "qwen-image-2.0-pro-2026-06-22",
+                "strict_reference": True,
+            }
+            with patch.object(module, "generate_dashscope_multimodal_image", return_value=False):
+                with patch.object(module, "generate_dashscope_image") as text_only:
+                    ok = module.generate_ai_image(
+                        "same product only",
+                        output_path,
+                        "1024x1024",
+                        reference_path=reference_path,
+                        config=config,
+                    )
+
+        self.assertFalse(ok)
+        text_only.assert_not_called()
+
     def test_result_archive_round_trip_and_path_traversal_rejected(self) -> None:
         from scripts.result_archive import build_result_archive, extract_result_archive
 

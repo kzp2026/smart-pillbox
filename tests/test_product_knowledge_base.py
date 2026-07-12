@@ -8,6 +8,38 @@ import unittest
 from pathlib import Path
 
 from scripts.product_knowledge_base import ProductKnowledgeBase, clean_text, generate_design_package, to_json_safe
+from scripts.industrial_design_prompt import PROMPT_SECTIONS, build_industrial_design_prompt
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+
+
+class IndustrialDesignPromptModulePresenceTests(unittest.TestCase):
+    def test_industrial_design_prompt_module_is_available(self) -> None:
+        self.assertTrue((ROOT_DIR / "scripts" / "industrial_design_prompt.py").exists())
+
+    def test_builds_all_required_industrial_design_prompt_sections(self) -> None:
+        prompt, data = build_industrial_design_prompt(
+            {
+                "functional_requirements": "定时提醒、误操作确认、手机同步",
+                "product_structure": "圆角矩形主体、透明翻盖、七个独立药仓、前置提醒屏",
+                "material_specification": "ABS 塑料外壳、TPE 软胶按键、半透明磨砂上盖",
+                "dimension_proportion": "长宽比约 1.6:1，单手可握，按键直径不小于 12mm",
+                "application_scenario": "居家养老环境，老人坐在餐桌旁使用",
+                "visual_style": "工业设计效果图，KeyShot 写实渲染，4K 高清",
+                "camera_angle": "45 度三分之四视角，柔和工作室布光",
+                "negative_constraints": "不改变七个药仓，不增加额外功能，不改变尺寸比例",
+            },
+            product_name="智能药盒",
+            demand_text="提醒老人按时吃药，操作简单",
+            context={"requirements": [{"title": "提醒清晰", "description": "大字体与声光提醒"}]},
+        )
+
+        self.assertTrue(all(f"【{section}】" in prompt for section in PROMPT_SECTIONS))
+        self.assertIn("ABS", data["material_specification"])
+        self.assertIn("七个独立药仓", prompt)
+        self.assertIn("不改变七个药仓", prompt)
+        self.assertIn("KeyShot", prompt)
 
 
 class ProductKnowledgeBaseTests(unittest.TestCase):
@@ -154,21 +186,21 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
         self.assertIn("评论证据", package["design_text"])
         self.assertIn("定时提醒", package["design_text"])
         self.assertIn("智能水杯", package["image_prompt_text"])
-        self.assertEqual(len(package["image_prompts"]), 6)
+        self.assertEqual(len(package["image_prompts"]), 8)
         self.assertTrue(all("智能水杯" in prompt for prompt in package["image_prompts"]))
         visual_assets = package["visual_assets"]
         self.assertEqual(
             [asset["key"] for asset in visual_assets],
-            ["render", "exploded", "detail", "three_view", "board", "usage"],
+            ["render_1", "render_2", "exploded", "detail", "three_view", "board", "usage_1", "usage_2"],
         )
         self.assertEqual(
             [asset["label"] for asset in visual_assets],
-            ["产品效果图", "产品爆炸图", "产品细节图", "产品三视图", "设计展板", "产品使用效果图"],
+            ["产品效果图 1", "产品效果图 2", "产品爆炸图", "产品细节图", "产品三视图", "设计展板", "产品使用效果图 1", "产品使用效果图 2"],
         )
         self.assertTrue(all("统一产品设计锁定" in asset["prompt"] for asset in visual_assets))
-        self.assertIn("单张完整爆炸图", visual_assets[1]["prompt"])
-        self.assertIn("设计展板", visual_assets[4]["prompt"])
-        self.assertIn("真实使用场景", visual_assets[5]["prompt"])
+        self.assertIn("单张完整爆炸图", visual_assets[2]["prompt"])
+        self.assertIn("设计展板", visual_assets[5]["prompt"])
+        self.assertIn("真实使用场景", visual_assets[6]["prompt"])
 
     def test_generation_marks_low_evidence_as_needing_review(self) -> None:
         package = generate_design_package(
@@ -180,6 +212,25 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
         self.assertLess(package["quality_score"], 80)
         self.assertEqual(package["quality_status"], "需补充证据")
         self.assertIn("当前知识库证据不足", package["quality_report"]["warnings"][0])
+
+    def test_generation_package_injects_industrial_design_constraints_into_visual_prompts(self) -> None:
+        package = generate_design_package(
+            target_product="智能药盒",
+            demand_text="提醒老人按时吃药，操作简单",
+            context={"products": [], "requirements": [], "comments": [], "evidence_count": 0},
+            industrial_constraints={
+                "material_specification": "304 不锈钢装饰件、ABS 塑料主体、半透明磨砂上盖",
+                "dimension_proportion": "长宽比 1.6:1，单手可握",
+                "application_scenario": "居家养老环境，餐桌旁使用",
+                "visual_style": "工业设计效果图，KeyShot 写实渲染，4K 高清",
+                "negative_constraints": "不改变七个药仓，不增加额外功能",
+            },
+        )
+
+        self.assertIn("【产品结构锁定】", package["industrial_design_prompt"])
+        self.assertIn("304 不锈钢", package["industrial_design_prompt"])
+        self.assertEqual(package["industrial_design_constraints"]["dimension_proportion"], "长宽比 1.6:1，单手可握")
+        self.assertTrue(all("【禁止修改项】" in asset["prompt"] for asset in package["visual_assets"]))
 
     def test_save_generation_run_accepts_postgres_native_json_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

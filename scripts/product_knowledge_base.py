@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Iterator
 from urllib.parse import urlparse
 
+from scripts.industrial_design_prompt import build_industrial_design_prompt
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = ROOT_DIR / "data" / "product_knowledge_base.sqlite3"
@@ -63,10 +65,16 @@ def tokenize(text: str) -> list[str]:
 
 VISUAL_ASSET_TEMPLATES = [
     {
-        "key": "render",
-        "label": "产品效果图",
+        "key": "render_1",
+        "label": "产品效果图 1",
         "size": "1024x1024",
-        "prompt": "专业产品效果图，45度主视角，单一产品主体，白色或浅灰干净背景，真实PBR材质、圆角、阴影、高光和核心交互区清晰可见。",
+        "prompt": "单张专业产品效果图，45度主视角，单一产品主体，白色或浅灰干净背景，真实PBR材质、圆角、阴影、高光和核心交互区清晰可见。",
+    },
+    {
+        "key": "render_2",
+        "label": "产品效果图 2",
+        "size": "1024x1024",
+        "prompt": "单张专业产品效果图，从略高的30度侧前方观察同一款产品，展示上盖、主控区和分格结构；不是拼贴图，不是多个产品角度合集。",
     },
     {
         "key": "exploded",
@@ -93,10 +101,16 @@ VISUAL_ASSET_TEMPLATES = [
         "prompt": "设计展板，整合产品效果图、爆炸图、细节图、三视图、使用效果图、需求分析和功能结构映射；信息层级清晰，少文字，多图像，适合论文和开题展示。",
     },
     {
-        "key": "usage",
-        "label": "产品使用效果图",
+        "key": "usage_1",
+        "label": "产品使用效果图 1",
         "size": "1024x1024",
-        "prompt": "真实使用场景图，目标用户在自然生活环境中使用同一款产品，人物动作、产品尺度、空间关系和核心功能表达真实合理。",
+        "prompt": "单张真实使用场景图，目标用户在自然生活环境中使用同一款产品，人物动作、产品尺度、空间关系和核心功能表达真实合理。",
+    },
+    {
+        "key": "usage_2",
+        "label": "产品使用效果图 2",
+        "size": "1024x1024",
+        "prompt": "单张真实使用场景图，从另一自然视角展示同一款产品被目标用户操作或提醒；产品轮廓、材料、分格数量和核心交互区必须与母版完全一致。",
     },
 ]
 
@@ -114,7 +128,7 @@ def build_visual_identity_lock(target_product: str, demand_text: str, requiremen
     requirement_text = "；".join(clean_text(item.get("title", "")) for item in requirements[:4] if item.get("title"))
     evidence_text = "；".join(clean_text(item.get("comment_original", "")) for item in comments[:2] if item.get("comment_original"))
     return (
-        f"统一产品设计锁定：所有六张图片必须表现同一款“{target_product}”，只能改变镜头视角、拆解方式、展板排版和使用场景，"
+        f"统一产品设计锁定：所有设计图片必须表现同一款“{target_product}”，只能改变镜头视角、拆解方式、展板排版和使用场景，"
         "不得改变产品本体；保持同一轮廓、同一主色、同一材料质感、同一关键部件数量、同一尺寸比例、同一操作区域。"
         f"目标需求：{demand_text or target_product}。"
         f"关键需求证据：{requirement_text or '安全、易用、稳定、符合目标用户痛点'}。"
@@ -124,12 +138,19 @@ def build_visual_identity_lock(target_product: str, demand_text: str, requiremen
     )
 
 
-def build_visual_assets(target_product: str, demand_text: str, requirements: list[dict], comments: list[dict]) -> list[dict]:
+def build_visual_assets(
+    target_product: str,
+    demand_text: str,
+    requirements: list[dict],
+    comments: list[dict],
+    industrial_design_prompt: str = "",
+) -> list[dict]:
     identity_lock = build_visual_identity_lock(target_product, demand_text, requirements, comments)
     assets = []
     for index, template in enumerate(VISUAL_ASSET_TEMPLATES, start=1):
         prompt = (
             f"{identity_lock}\n\n"
+            f"{industrial_design_prompt}\n\n"
             f"图像任务 {index}：{template['label']}。{template['prompt']} "
             f"产品名称必须明确是{target_product}，画面只服务于当前这一款产品。"
         )
@@ -600,7 +621,12 @@ class ProductKnowledgeBase:
         return int(cursor.rowcount or 0)
 
 
-def generate_design_package(target_product: str, demand_text: str, context: dict) -> dict:
+def generate_design_package(
+    target_product: str,
+    demand_text: str,
+    context: dict,
+    industrial_constraints: dict[str, object] | None = None,
+) -> dict:
     target_product = clean_text(target_product)
     demand_text = clean_text(demand_text)
     requirements = context.get("requirements", [])[:6]
@@ -660,7 +686,19 @@ def generate_design_package(target_product: str, demand_text: str, context: dict
 本方案已保留历史评论证据链。后续生成效果图时，应保持同一产品主体、同一结构语言和同一用户场景，避免生成与目标产品无关的外观。
 """
 
-    visual_assets = build_visual_assets(target_product, demand_text, requirements, comments)
+    industrial_design_prompt, normalized_constraints = build_industrial_design_prompt(
+        industrial_constraints,
+        product_name=target_product,
+        demand_text=demand_text,
+        context=context,
+    )
+    visual_assets = build_visual_assets(
+        target_product,
+        demand_text,
+        requirements,
+        comments,
+        industrial_design_prompt=industrial_design_prompt,
+    )
     image_prompts = [asset["prompt"] for asset in visual_assets]
     image_prompt_text = image_prompts[0]
 
@@ -677,6 +715,8 @@ def generate_design_package(target_product: str, demand_text: str, context: dict
         "image_prompt_text": image_prompt_text,
         "image_prompts": image_prompts,
         "visual_assets": visual_assets,
+        "industrial_design_prompt": industrial_design_prompt,
+        "industrial_design_constraints": normalized_constraints,
         "quality_score": score,
         "quality_status": status,
         "quality_report": {

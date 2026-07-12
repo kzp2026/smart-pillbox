@@ -888,13 +888,26 @@ def generate_ai_image(
 ) -> bool:
     """按配置选择 OpenAI 兼容接口或阿里云百炼 DashScope 生成真实感渲染图。"""
     config = config or get_image_api_config()
+    has_reference = bool(reference_path and reference_path.exists())
+    strict_reference = bool(config.get("strict_reference"))
     if config["provider"] == "dashscope":
         model = str(config.get("model", ""))
+        if has_reference and strict_reference and not (
+            is_dashscope_multimodal_model(model) and supports_dashscope_reference_image(model)
+        ):
+            record_image_event(output_path, "dashscope_reference", "failed", "当前模型不支持严格参考图锁定")
+            return False
         if is_dashscope_multimodal_model(model):
-            if reference_path and reference_path.exists() and supports_dashscope_reference_image(model):
+            if has_reference and not supports_dashscope_reference_image(model):
+                record_image_event(output_path, "dashscope_reference", "failed", "当前模型不支持参考图锁定")
+                return False
+            if has_reference and supports_dashscope_reference_image(model):
                 ok = generate_dashscope_multimodal_image(prompt, output_path, size, config, reference_path=reference_path)
                 if ok:
                     return True
+                if strict_reference:
+                    record_image_event(output_path, "retry", "blocked", "严格一致性模式禁止降级为纯文本生成")
+                    return False
                 record_image_event(output_path, "retry", "info", "参考图生成失败，自动改用同模型纯文本写实生成重试")
             ok = generate_dashscope_multimodal_image(prompt, output_path, size, config, reference_path=None)
             if ok:
