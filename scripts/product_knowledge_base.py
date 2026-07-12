@@ -629,6 +629,8 @@ def generate_design_package(
 ) -> dict:
     target_product = clean_text(target_product)
     demand_text = clean_text(demand_text)
+    if industrial_constraints is None and isinstance(context.get("industrial_constraints"), dict):
+        industrial_constraints = context["industrial_constraints"]
     requirements = context.get("requirements", [])[:6]
     comments = context.get("comments", [])[:6]
     products = context.get("products", [])[:4]

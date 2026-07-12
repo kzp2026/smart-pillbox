@@ -29,7 +29,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-12-visual-qa-v2"
+APP_VERSION = "2026-07-12-industrial-prompt-v3"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
@@ -1306,12 +1306,8 @@ with tab_generate:
         with st.spinner("正在检索知识库并生成方案..."):
             query = f"{target_product} {demand_text}"
             context = kb.search_context(query, limit=8)
-            package = generate_design_package(
-                target_product,
-                demand_text,
-                context,
-                industrial_constraints=industrial_constraints,
-            )
+            context = {**context, "industrial_constraints": industrial_constraints}
+            package = generate_design_package(target_product, demand_text, context)
             context = as_plain_json(context)
             package = as_plain_json(package)
             try:

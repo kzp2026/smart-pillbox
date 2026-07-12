@@ -232,6 +232,24 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
         self.assertEqual(package["industrial_design_constraints"]["dimension_proportion"], "长宽比 1.6:1，单手可握")
         self.assertTrue(all("【禁止修改项】" in asset["prompt"] for asset in package["visual_assets"]))
 
+    def test_generation_package_accepts_constraints_embedded_in_context(self) -> None:
+        package = generate_design_package(
+            target_product="智能药盒",
+            demand_text="提醒老人按时吃药",
+            context={
+                "products": [],
+                "requirements": [],
+                "comments": [],
+                "evidence_count": 0,
+                "industrial_constraints": {
+                    "product_structure": "透明翻盖、七个独立药仓、前置提醒屏",
+                    "negative_constraints": "不改变七个药仓",
+                },
+            },
+        )
+
+        self.assertIn("透明翻盖、七个独立药仓", package["industrial_design_prompt"])
+
     def test_save_generation_run_accepts_postgres_native_json_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "kb.sqlite3"
