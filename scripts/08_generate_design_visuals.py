@@ -824,7 +824,13 @@ def generate_dashscope_multimodal_image(
         return False
 
 
-def generate_openai_image(prompt: str, output_path: Path, size: str, config: dict) -> bool:
+def generate_openai_image(
+    prompt: str,
+    output_path: Path,
+    size: str,
+    config: dict,
+    reference_path: Path | None = None,
+) -> bool:
     """使用 OpenAI Images 兼容接口生成真实感渲染图。"""
     api_key = config.get("api_key")
     if not api_key:
@@ -839,13 +845,18 @@ def generate_openai_image(prompt: str, output_path: Path, size: str, config: dic
         model = config["model"]
         client = OpenAI(api_key=api_key, base_url=config.get("base_url") or None)
 
-        response = client.images.generate(
-            model=model,
-            prompt=prompt,
-            size=compatible_image_size(model, size),
-            quality=config["quality"],
-            n=1,
-        )
+        image_args = {
+            "model": model,
+            "prompt": prompt,
+            "size": compatible_image_size(model, size),
+            "quality": config["quality"],
+            "n": 1,
+        }
+        if reference_path and reference_path.exists():
+            with reference_path.open("rb") as reference_file:
+                response = client.images.edit(image=reference_file, **image_args)
+        else:
+            response = client.images.generate(**image_args)
         image_data = response.data[0]
         image_url = getattr(image_data, "url", None)
         if image_url:
@@ -891,7 +902,7 @@ def generate_ai_image(
             if model.strip().lower().startswith("qwen-image-2.0"):
                 return False
         return generate_dashscope_image(prompt, output_path, size, config)
-    return generate_openai_image(prompt, output_path, size, config)
+    return generate_openai_image(prompt, output_path, size, config, reference_path=reference_path)
 
 
 def structure_prompt_context(struct_df: pd.DataFrame) -> str:

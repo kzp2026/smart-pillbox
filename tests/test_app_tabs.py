@@ -55,6 +55,27 @@ class AppTabsTests(unittest.TestCase):
             self.assertIn(snippet, app_source)
         self.assertNotIn("生图提示词", app_source)
 
+    def test_main_app_offers_openai_rendering_without_flattening_exploded_view(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+        for snippet in [
+            'key="openai_api_key_shared"',
+            "OpenAI API Key",
+            "OpenAI 写实渲染",
+            "gpt-image-2",
+            "build_openai_config",
+            "render_provider",
+            "单张立体写实爆炸图",
+            "图像服务生成",
+        ]:
+            self.assertIn(snippet, app_source)
+        self.assertNotIn('if key == "exploded":\n            create_visual_fallback', app_source)
+
+    def test_openai_rendering_keeps_the_product_reference_for_follow_up_views(self) -> None:
+        visual_source = (ROOT_DIR / "scripts" / "08_generate_design_visuals.py").read_text(encoding="utf-8")
+        self.assertIn("reference_path: Path | None = None", visual_source)
+        self.assertIn("client.images.edit", visual_source)
+        self.assertIn("reference_path=reference_path", visual_source)
+
     def test_legacy_result_page_keeps_legacy_stage_tabs_visible(self) -> None:
         page_source = (ROOT_DIR / "pages" / "03_旧版结果预览.py").read_text(encoding="utf-8")
         for label in [

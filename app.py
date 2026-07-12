@@ -28,13 +28,18 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-05-visual-assets-v2"
+APP_VERSION = "2026-07-12-openai-render-v1"
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
     "qwen-image-2.0-pro",
     "qwen-image-max",
     "qwen-image-plus",
     "wan2.2-t2i-plus",
+]
+OPENAI_IMAGE_MODEL_OPTIONS = [
+    "gpt-image-2",
+    "gpt-image-1.5",
+    "gpt-image-1-mini",
 ]
 
 
@@ -158,6 +163,18 @@ def build_dashscope_config(api_key: str, model: str) -> dict:
     }
 
 
+def build_openai_config(api_key: str, model: str) -> dict:
+    return {
+        "provider": "openai",
+        "api_key": api_key,
+        "base_url": os.getenv("OPENAI_IMAGE_BASE_URL") or None,
+        "task_url": "",
+        "model": model,
+        "quality": "high",
+        "custom_base_url": bool(os.getenv("OPENAI_IMAGE_BASE_URL")),
+    }
+
+
 def visual_asset_output_path(target_product: str, asset: dict, image_index: int) -> Path:
     safe_name = "".join(char if char.isalnum() or "\u4e00" <= char <= "\u9fff" else "_" for char in target_product)[:40] or "product"
     image_dir = OUTPUT_DIR / "dashscope_images"
@@ -167,16 +184,15 @@ def visual_asset_output_path(target_product: str, asset: dict, image_index: int)
     return image_dir / f"{safe_name}_{image_index:02d}_{asset_key}_{asset_label}.png"
 
 
-def generate_dashscope_render(
+def generate_image_render(
     prompt: str,
     target_product: str,
-    api_key: str,
-    model: str,
+    image_config: dict,
     image_index: int = 1,
     asset: dict | None = None,
     reference_image: Path | None = None,
 ) -> Path | None:
-    if not api_key:
+    if not image_config.get("api_key"):
         return None
     module = load_design_visuals_module()
     asset = asset or {"key": f"image_{image_index:02d}", "label": f"效果图{image_index}", "size": "1024x1024"}
@@ -186,7 +202,7 @@ def generate_dashscope_render(
         output_path,
         size=str(asset.get("size") or "1024x1024"),
         reference_path=reference_image,
-        config=build_dashscope_config(api_key, model),
+        config=image_config,
     )
     return output_path if ok and output_path.exists() else None
 
@@ -213,7 +229,7 @@ def build_visual_assets_from_package(package: dict) -> list[dict]:
     identity_lock = package_visual_identity_lock(package)
     templates = [
         ("render", "产品效果图", "1024x1024", "专业产品效果图，45度主视角，单一产品主体，白色或浅灰干净背景，真实PBR材质、圆角、阴影、高光和核心交互区清晰可见。"),
-        ("exploded", "产品爆炸图", "1024x1792", "单张完整爆炸图，沿中心垂直装配轴从上到下分层悬浮，展示外壳、功能模块、内部空间、连接件、可维护部件和装配关系；不是多宫格，不是拼贴图，不是另一款产品。"),
+        ("exploded", "产品爆炸图", "1024x1792", "单张立体写实爆炸图：等距轴测视角，所有同款产品零部件沿中心垂直装配轴从上到下真实分离并分层悬浮；部件必须有厚度、圆角、透视、真实阴影和 PBR 材质高光。展示外壳、功能模块、内部空间、连接件、可维护部件和装配关系；不是平面示意图、不是多宫格、不是拼贴图、不是另一款产品。"),
         ("detail", "产品细节图", "1024x1024", "产品细节特写图，只放大同一款产品上的关键结构、材质、开启方式、按键、屏幕、提示灯或连接细节，微距摄影质感。"),
         ("three_view", "产品三视图", "1792x1024", "工业设计三视图，同一产品以统一比例展示正视图、侧视图和俯视图，严格对齐，白色背景，无透视变形，适合工程表达。"),
         ("board", "设计展板", "1600x2200", "设计展板，整合产品效果图、爆炸图、细节图、三视图、使用效果图、需求分析和功能结构映射；信息层级清晰，少文字，多图像，适合论文和开题展示。"),
@@ -292,8 +308,7 @@ def create_visual_fallback(module, package: dict, asset: dict, output_path: Path
 
 def generate_visual_asset_set(
     package: dict,
-    api_key: str,
-    model: str,
+    image_config: dict,
     progress,
     status,
 ) -> list[Path]:
@@ -307,27 +322,26 @@ def generate_visual_asset_set(
         key = str(asset.get("key") or "")
         label = str(asset.get("label") or f"效果图{index}")
         output_path = visual_asset_output_path(product_name, asset, index)
-        status.write(f"正在生成第 {index}/{len(assets)} 张：{label}...")
-        if key == "exploded":
-            create_visual_fallback(module, package, asset, output_path, generated_paths)
-        elif key == "board":
+        if key == "board":
             board_asset = (index, asset)
             progress.progress(int(index / max(len(assets), 1) * 100))
             continue
+        if key == "exploded":
+            status.write(f"图像服务生成第 {index}/{len(assets)} 张：单张立体写实爆炸图...")
         else:
-            generated_image_path = generate_dashscope_render(
-                str(asset.get("prompt", "")),
-                product_name,
-                api_key,
-                model,
-                index,
-                asset=asset,
-                reference_image=reference_image,
-            )
-            if generated_image_path:
-                output_path = generated_image_path
-            else:
-                create_visual_fallback(module, package, asset, output_path, generated_paths)
+            status.write(f"图像服务生成第 {index}/{len(assets)} 张：{label}...")
+        generated_image_path = generate_image_render(
+            str(asset.get("prompt", "")),
+            product_name,
+            image_config,
+            index,
+            asset=asset,
+            reference_image=reference_image,
+        )
+        if generated_image_path:
+            output_path = generated_image_path
+        else:
+            create_visual_fallback(module, package, asset, output_path, generated_paths)
         if output_path.exists():
             generated_paths[key or f"image_{index}"] = output_path
             if key == "render":
@@ -387,7 +401,7 @@ def render_image_download_grid(image_paths: list[Path], key_prefix: str, assets:
             )
 
 
-def render_prompt_gallery(package: dict, dashscope_api_key: str, image_model: str, button_key: str) -> None:
+def render_prompt_gallery(package: dict, image_config: dict, render_provider: str, button_key: str) -> None:
     assets = get_visual_assets(package)
     prompts = [str(asset.get("prompt", "")).strip() for asset in assets if str(asset.get("prompt", "")).strip()]
     st.subheader("prompt")
@@ -402,18 +416,18 @@ def render_prompt_gallery(package: dict, dashscope_api_key: str, image_model: st
     st.subheader("效果图预览")
     render_image_download_grid(get_latest_image_paths(), button_key, assets)
 
-    if st.button(f"用阿里云百炼生成 {len(prompts) or 6} 张效果图", use_container_width=True, disabled=not dashscope_api_key or not prompts, key=button_key):
+    if st.button(f"用{render_provider}生成 {len(prompts) or 6} 张效果图", use_container_width=True, disabled=not image_config.get("api_key") or not prompts, key=button_key):
         progress = st.progress(0)
         status = st.empty()
-        generated_paths = generate_visual_asset_set(package, dashscope_api_key, image_model, progress, status)
+        generated_paths = generate_visual_asset_set(package, image_config, progress, status)
         if generated_paths:
             store_latest_image_paths(generated_paths)
             st.success(f"已生成并补齐 {len(generated_paths)} 张设计图片。")
             render_image_download_grid(get_latest_image_paths(), f"{button_key}_generated", assets)
         else:
-            st.error("效果图生成失败，请检查百炼模型权限、余额、Key 或网络。prompt 已保留，可复制到图像模型手动生成。")
-    elif not dashscope_api_key:
-        st.caption("填写阿里云百炼 Key 后可在这里直接生成 6 张效果图。")
+            st.error(f"效果图生成失败，请检查{render_provider}模型权限、余额、Key 或网络。prompt 已保留，可复制到图像模型手动生成。")
+    elif not image_config.get("api_key"):
+        st.caption(f"填写{render_provider} API Key 后可在这里直接生成 6 张效果图。")
 
 
 def render_quality_report(package: dict) -> None:
@@ -870,14 +884,14 @@ def inject_cloud_studio_theme() -> None:
     )
 
 
-def render_cloud_studio_overview(products: list[dict], database_url: str, dashscope_ready: bool) -> None:
+def render_cloud_studio_overview(products: list[dict], database_url: str, rendering_ready: bool, rendering_label: str) -> None:
     product_count = len(products)
     comment_count = sum(int(product.get("comment_count") or 0) for product in products)
     requirement_count = sum(int(product.get("requirement_count") or 0) for product in products)
     latest_update = str(products[0].get("updated_at", "暂无"))[:16] if products else "暂无"
     database_label = "Supabase / PostgreSQL" if not database_url.startswith("sqlite") else f"本地 SQLite / {DEFAULT_DB_PATH.name}"
-    dashscope_label = "已启用" if dashscope_ready else "待配置"
-    dashscope_class = "is-live" if dashscope_ready else ""
+    rendering_status = "已启用" if rendering_ready else "待配置"
+    rendering_class = "is-live" if rendering_ready else ""
     db_class = "is-live" if not database_url.startswith("sqlite") else ""
     recent_rows = "".join(
         f"<li><span>{escape(str(product.get('name', '未命名产品')))}</span><strong>{format_number(product.get('comment_count'))} 条评论</strong></li>"
@@ -899,7 +913,7 @@ def render_cloud_studio_overview(products: list[dict], database_url: str, dashsc
                 </div>
                 <div class="studio-actions">
                     <span class="studio-pill {db_class}">{escape(database_label)}</span>
-                    <span class="studio-pill {dashscope_class}">阿里云写实渲染：{dashscope_label}</span>
+                    <span class="studio-pill {rendering_class}">写实渲染：{escape(rendering_label)} / {rendering_status}</span>
                 </div>
             </div>
             <div class="studio-flow">
@@ -939,8 +953,8 @@ def render_cloud_studio_overview(products: list[dict], database_url: str, dashsc
 def render_main_result_preview(
     package: dict | None,
     context: dict | None,
-    dashscope_api_key: str,
-    image_model: str,
+    image_config: dict,
+    render_provider: str,
     button_key: str = "main_result_preview_render",
 ) -> None:
     st.header("结果预览")
@@ -965,13 +979,14 @@ def render_main_result_preview(
                 st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
 
     with right:
-        render_prompt_gallery(package, dashscope_api_key, image_model, button_key)
+        render_prompt_gallery(package, image_config, render_provider, button_key)
 
 
 st.set_page_config(page_title="产品评论知识库智能体", page_icon="🧠", layout="wide")
 inject_cloud_studio_theme()
 database_url = get_database_url()
 st.session_state.setdefault("dashscope_api_key_shared", "")
+st.session_state.setdefault("openai_api_key_shared", "")
 
 with st.sidebar:
     st.title("🧠 知识库控制台")
@@ -987,7 +1002,11 @@ with st.sidebar:
         st.code('PRODUCT_KB_DATABASE_URL = "postgresql://user:password@host:5432/postgres"', language="toml")
 
     st.divider()
-    st.subheader("🎨 阿里云写实渲染")
+    st.subheader("🎨 写实渲染服务")
+    render_provider = st.radio("本次生成使用", ["阿里云百炼", "OpenAI"], horizontal=True)
+
+    st.caption("阿里云入口保留；选择 OpenAI 后可优先生成单张立体写实爆炸图。两个 Key 都只保存在当前浏览器会话。")
+    st.markdown("**阿里云写实渲染**")
     runtime_dashscope_key = st.text_input(
         "阿里云百炼 API Key",
         type="password",
@@ -997,16 +1016,33 @@ with st.sidebar:
     )
     image_model = st.selectbox("图片模型", IMAGE_MODEL_OPTIONS, index=0)
     configured_dashscope_key = runtime_dashscope_key or get_secret("DASHSCOPE_API_KEY") or get_secret("QWEN_IMAGE_API_KEY")
-    if configured_dashscope_key:
-        st.success(f"写实渲染入口已启用：DashScope / {image_model}")
+    st.markdown("**OpenAI 写实渲染**")
+    runtime_openai_key = st.text_input(
+        "OpenAI API Key",
+        type="password",
+        key="openai_api_key_shared",
+        placeholder="sk-...",
+        help="仅当前会话使用，不写入代码、数据库、生成记录或下载文件。也可在 Secrets 配置 OPENAI_API_KEY。",
+    )
+    openai_image_model = st.selectbox("OpenAI 图片模型", OPENAI_IMAGE_MODEL_OPTIONS, index=0)
+    configured_openai_key = runtime_openai_key or get_secret("OPENAI_API_KEY") or get_secret("IMAGE_API_KEY")
+
+    if render_provider == "OpenAI":
+        active_image_config = build_openai_config(configured_openai_key, openai_image_model)
+        active_render_label = f"OpenAI / {openai_image_model}"
     else:
-        st.caption("未填写 Key 时只生成可复制的写实渲染提示词。")
+        active_image_config = build_dashscope_config(configured_dashscope_key, image_model)
+        active_render_label = f"DashScope / {image_model}"
+    if active_image_config.get("api_key"):
+        st.success(f"写实渲染入口已启用：{active_render_label}")
+    else:
+        st.caption(f"请填写{render_provider} API Key；未填写时只生成可复制的写实渲染提示词。")
 
 
 kb = get_kb(database_url, owner_id)
 products = kb.list_products()
 
-render_cloud_studio_overview(products, database_url, bool(configured_dashscope_key))
+render_cloud_studio_overview(products, database_url, bool(active_image_config.get("api_key")), active_render_label)
 
 (
     tab_import,
@@ -1143,14 +1179,14 @@ with tab_generate:
                     evidence_rows.append({"类型": "评论", "来源产品": item.get("product_name", ""), "内容": item.get("comment_original", ""), "证据": ""})
                 st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
 
-            render_prompt_gallery(package, configured_dashscope_key, image_model, "generate_tab_render_all")
+            render_prompt_gallery(package, active_image_config, render_provider, "generate_tab_render_all")
 
 with tab_result:
     render_main_result_preview(
         st.session_state.get("latest_generation"),
         st.session_state.get("latest_context"),
-        configured_dashscope_key,
-        image_model,
+        active_image_config,
+        render_provider,
     )
 
 with tab_library:
