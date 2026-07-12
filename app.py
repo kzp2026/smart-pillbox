@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from scripts.common import build_cleaned_dataframe
 from scripts.product_knowledge_base import (
@@ -29,7 +30,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-12-industrial-prompt-v3"
+APP_VERSION = "2026-07-12-prompt-copy-uniqueness-v4"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
@@ -224,15 +225,30 @@ def build_reference_locked_prompt(prompt: str, asset: dict, has_reference: bool)
         if key == "three_view"
         else "严格只输出一张单画面，不得制作九宫格、拼贴、分屏、接触表、多个角度合集、多个方案或产品变体。"
     )
+    distinct_rule = (
+        "第二张产品效果图必须使用与产品效果图 1 不同的镜头构图、机位高度和光影关系，但产品本体必须完全一致。"
+        if key == "render_2"
+        else "第二张使用效果图必须使用与产品使用效果图 1 不同的使用动作或场景构图，但产品本体必须完全一致。"
+        if key == "usage_2"
+        else ""
+    )
     return (
-        f"视觉一致性硬约束：{reference_rule} 图像类型：{asset_label}。{layout_rule} "
+        f"视觉一致性硬约束：{reference_rule} 图像类型：{asset_label}。{layout_rule} {distinct_rule} "
         "若无法保持同一产品，请不要替换设计。no collage, no contact sheet, no multi-panel, no product variations.\n\n"
         f"{prompt}"
     )
 
 
-def validate_visual_asset(image_path: Path, asset: dict) -> dict[str, object]:
-    return evaluate_visual_asset(image_path, str(asset.get("key") or ""))
+def validate_visual_asset(
+    image_path: Path,
+    asset: dict,
+    reference_image: Path | None = None,
+) -> dict[str, object]:
+    return evaluate_visual_asset(
+        image_path,
+        str(asset.get("key") or ""),
+        reference_image=reference_image,
+    )
 
 
 def package_visual_identity_lock(package: dict) -> str:
@@ -438,7 +454,18 @@ def generate_visual_asset_set(
                 final_reason = "图像服务未返回图片，请检查模型权限、余额或网络"
                 continue
 
-            result = validate_visual_asset(generated_image_path, asset)
+            distinct_reference = (
+                generated_paths.get("render_1")
+                if key == "render_2"
+                else generated_paths.get("usage_1")
+                if key == "usage_2"
+                else None
+            )
+            result = validate_visual_asset(
+                generated_image_path,
+                asset,
+                reference_image=distinct_reference,
+            )
             if result.get("accepted"):
                 accepted_path = generated_image_path
                 break
@@ -528,11 +555,44 @@ def render_image_download_grid(image_paths: list[Path], key_prefix: str, assets:
             )
 
 
+def build_all_prompts_text(assets: list[dict]) -> str:
+    return "\n\n".join(
+        f"prompt {index} · {asset.get('label', '效果图')}\n{str(asset.get('prompt') or '').strip()}"
+        for index, asset in enumerate(assets, start=1)
+        if str(asset.get("prompt") or "").strip()
+    )
+
+
+def render_copy_all_prompts_button(prompt_text: str, key: str) -> None:
+    payload = json.dumps(prompt_text, ensure_ascii=False).replace("</", "<\\/")
+    button_id = f"copy-all-prompts-{key}".replace("_", "-")
+    components.html(
+        f"""
+        <button id="{button_id}" style="width:100%;height:38px;border:1px solid #c9daf8;border-radius:8px;background:#fff;color:#17345f;font-weight:650;cursor:pointer;">复制全部 prompt</button>
+        <script>
+          const button = document.getElementById({json.dumps(button_id)});
+          const promptText = {payload};
+          button.addEventListener('click', async () => {{
+            try {{
+              await navigator.clipboard.writeText(promptText);
+              button.textContent = '已复制全部 prompt';
+              setTimeout(() => button.textContent = '复制全部 prompt', 1600);
+            }} catch (error) {{
+              button.textContent = '复制失败，请使用每条 prompt 的复制图标';
+            }}
+          }});
+        </script>
+        """,
+        height=46,
+    )
+
+
 def render_prompt_gallery(package: dict, image_config: dict, render_provider: str, button_key: str) -> None:
     assets = get_visual_assets(package)
     prompts = [str(asset.get("prompt", "")).strip() for asset in assets if str(asset.get("prompt", "")).strip()]
     st.subheader("prompt")
     if assets:
+        render_copy_all_prompts_button(build_all_prompts_text(assets), f"{button_key}_all_prompts")
         for index, asset in enumerate(assets, start=1):
             st.markdown(f"**prompt {index} · {asset.get('label', '效果图')}**")
             prompt = str(asset.get("prompt", "")).strip()

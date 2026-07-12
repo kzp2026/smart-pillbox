@@ -74,6 +74,24 @@ class VisualAssetQualityTests(unittest.TestCase):
 
         self.assertTrue(result["accepted"])
 
+    def test_rejects_duplicate_second_render_and_usage_view(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reference_path = root / "render-1.png"
+            duplicate_path = root / "render-2.png"
+            image = Image.new("RGB", (900, 900), "#f7f8fa")
+            draw = ImageDraw.Draw(image)
+            draw.rounded_rectangle((180, 290, 720, 590), radius=70, fill="#aab7c7")
+            image.save(reference_path)
+            image.save(duplicate_path)
+
+            render_result = evaluate_visual_asset(duplicate_path, "render_2", reference_image=reference_path)
+            usage_result = evaluate_visual_asset(duplicate_path, "usage_2", reference_image=reference_path)
+
+        self.assertFalse(render_result["accepted"])
+        self.assertFalse(usage_result["accepted"])
+        self.assertIn("过于相似", render_result["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

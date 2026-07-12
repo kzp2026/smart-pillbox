@@ -104,6 +104,17 @@ class AppTabsTests(unittest.TestCase):
         ]:
             self.assertIn(snippet, app_source)
 
+    def test_main_app_can_copy_all_prompts_and_checks_view_distinctness(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+        for snippet in [
+            "复制全部 prompt",
+            "navigator.clipboard.writeText",
+            "reference_image=distinct_reference",
+            "第二张产品效果图必须使用与产品效果图 1 不同的镜头构图",
+            "第二张使用效果图必须使用与产品使用效果图 1 不同的使用动作或场景构图",
+        ]:
+            self.assertIn(snippet, app_source)
+
     def test_legacy_result_page_keeps_legacy_stage_tabs_visible(self) -> None:
         page_source = (ROOT_DIR / "pages" / "03_旧版结果预览.py").read_text(encoding="utf-8")
         for label in [

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image, ImageStat
+from PIL import Image, ImageChops, ImageStat
 
 
 STRUCTURED_LAYOUT_ASSETS = {"three_view", "board"}
@@ -46,7 +46,22 @@ def _looks_like_contact_sheet(image: Image.Image) -> bool:
     return len(vertical) >= 2 and len(horizontal) >= 2
 
 
-def evaluate_visual_asset(image_path: Path, asset_key: str) -> dict[str, object]:
+def _visual_difference(image: Image.Image, reference_image: Path) -> float | None:
+    try:
+        with Image.open(reference_image) as opened:
+            reference = opened.convert("RGB")
+        current = image.convert("L").resize((48, 48), Image.Resampling.LANCZOS)
+        baseline = reference.convert("L").resize((48, 48), Image.Resampling.LANCZOS)
+        return ImageStat.Stat(ImageChops.difference(current, baseline)).mean[0] / 255
+    except Exception:
+        return None
+
+
+def evaluate_visual_asset(
+    image_path: Path,
+    asset_key: str,
+    reference_image: Path | None = None,
+) -> dict[str, object]:
     """Reject obvious contact sheets before they are presented as product renders."""
     if not image_path.exists() or image_path.stat().st_size == 0:
         return {"accepted": False, "reason": "图片文件不存在或为空"}
@@ -67,6 +82,11 @@ def evaluate_visual_asset(image_path: Path, asset_key: str) -> dict[str, object]
 
     if is_single_product_asset(asset_key) and _looks_like_contact_sheet(image):
         return {"accepted": False, "reason": "检测到疑似多宫格或拼贴图"}
+
+    if asset_key in {"render_2", "usage_2"} and reference_image and reference_image.exists():
+        difference = _visual_difference(image, reference_image)
+        if difference is not None and difference <= 0.025:
+            return {"accepted": False, "reason": "与同组第一张图片过于相似，请生成不同视角或场景"}
 
     return {
         "accepted": True,
