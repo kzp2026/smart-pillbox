@@ -115,6 +115,12 @@ class AppTabsTests(unittest.TestCase):
         ]:
             self.assertIn(snippet, app_source)
 
+    def test_main_app_keeps_scheme_generation_button_clickable(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+        self.assertIn('st.button("从知识库生成方案", type="primary", use_container_width=True)', app_source)
+        self.assertNotIn('disabled=not target_product.strip()', app_source)
+        self.assertIn("请先填写要生成的产品", app_source)
+
     def test_legacy_result_page_keeps_legacy_stage_tabs_visible(self) -> None:
         page_source = (ROOT_DIR / "pages" / "03_旧版结果预览.py").read_text(encoding="utf-8")
         for label in [

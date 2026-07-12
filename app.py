@@ -30,7 +30,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-12-prompt-copy-uniqueness-v4"
+APP_VERSION = "2026-07-12-scheme-button-v5"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
@@ -1360,9 +1360,11 @@ with tab_generate:
         "camera_angle": camera_angle,
         "negative_constraints": negative_constraints,
     }
-    generate_clicked = st.button("从知识库生成方案", type="primary", use_container_width=True, disabled=not target_product.strip())
+    generate_clicked = st.button("从知识库生成方案", type="primary", use_container_width=True)
 
-    if generate_clicked:
+    if generate_clicked and not target_product.strip():
+        st.warning("请先填写要生成的产品。")
+    elif generate_clicked:
         with st.spinner("正在检索知识库并生成方案..."):
             query = f"{target_product} {demand_text}"
             context = kb.search_context(query, limit=8)
