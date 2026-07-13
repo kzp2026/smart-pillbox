@@ -75,6 +75,13 @@ class AppTabsTests(unittest.TestCase):
         self.assertLess(app_source.index('"wan2.7-image-pro"'), app_source.index("DEFAULT_IMAGE_MODEL,"))
         self.assertNotIn("生图提示词", app_source)
 
+    def test_main_app_does_not_depend_on_hot_reloaded_constraint_imports(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn("def ensure_runtime_visual_asset_constraints", app_source)
+        self.assertNotIn("    ensure_visual_asset_constraints,\n", app_source)
+        self.assertNotIn("    exploded_view_component_constraints,\n", app_source)
+
     def test_main_app_offers_openai_rendering_without_flattening_exploded_view(self) -> None:
         app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
         for snippet in [

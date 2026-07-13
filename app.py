@@ -19,8 +19,6 @@ from scripts.common import build_cleaned_dataframe
 from scripts.product_knowledge_base import (
     DEFAULT_DB_PATH,
     ProductKnowledgeBase,
-    ensure_visual_asset_constraints,
-    exploded_view_component_constraints,
     generate_design_package,
     normalize_database_url,
 )
@@ -33,7 +31,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-13-exploded-components-v12"
+APP_VERSION = "2026-07-13-exploded-components-v13"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     "wan2.7-image-pro",
@@ -297,6 +295,34 @@ def package_visual_identity_lock(package: dict) -> str:
     )
 
 
+def runtime_exploded_view_component_constraints(product_name: str) -> str:
+    general = (
+        "爆炸图组件真实性约束：每一层必须是功能不同且可装配的真实零部件，按唯一装配顺序对齐；"
+        "禁止复制同一个外壳、容器、托盘或分格板来凑层数，禁止出现多个完整产品。"
+    )
+    if "药盒" not in product_name:
+        return general
+    return (
+        f"{general} 智能药盒从上到下只允许这些层级：透明上盖 1 件、防潮密封圈 1 件、"
+        "药格托盘只允许出现 1 层、上壳体 1 件、前置显示与指示灯模块 1 件、带 MCU 和无线通信芯片的主控 PCB 1 件、"
+        "蜂鸣器或扬声器 1 件、振动马达 1 件、锂电池 1 件、USB-C 充电小板与接口 1 组、连接排线与少量螺钉、下壳体 1 件、"
+        "防滑底垫 1 件。必须清楚看见 PCB、芯片、电池、扬声器、马达、充电接口和排线；"
+        "不得用重复药格托盘代替内部零件，不得生成两层或更多药格，不得把多个收纳盒叠在一起。"
+    )
+
+
+def ensure_runtime_visual_asset_constraints(target_product: str, assets: list[dict]) -> list[dict]:
+    upgraded: list[dict] = []
+    exploded_constraints = runtime_exploded_view_component_constraints(target_product)
+    for asset in assets:
+        current = dict(asset)
+        prompt = str(current.get("prompt") or "").strip()
+        if current.get("key") == "exploded" and "爆炸图组件真实性约束" not in prompt:
+            current["prompt"] = f"{prompt}\n\n{exploded_constraints}".strip()
+        upgraded.append(current)
+    return upgraded
+
+
 def build_visual_assets_from_package(package: dict) -> list[dict]:
     product_name = str(package.get("target_product") or "product")
     identity_lock = package_visual_identity_lock(package)
@@ -304,7 +330,7 @@ def build_visual_assets_from_package(package: dict) -> list[dict]:
     templates = [
         ("render_1", "产品效果图 1", "1024x1024", "单张专业产品效果图，45度主视角，单一产品主体，白色或浅灰干净背景，真实PBR材质、圆角、阴影、高光和核心交互区清晰可见；不是拼图，不是九宫格。"),
         ("render_2", "产品效果图 2", "1024x1024", "单张专业产品效果图，从略高的30度侧前方观察同一款产品，展示上盖、主控区和分格结构；不是拼图，不是九宫格。"),
-        ("exploded", "产品爆炸图", "1024x1792", f"单张立体写实爆炸图：等距轴测视角，所有同款产品零部件沿中心垂直装配轴从上到下真实分离并分层悬浮；部件必须有厚度、圆角、透视、真实阴影和 PBR 材质高光。展示外壳、唯一功能托盘、真实内部模块、连接件、紧固件和装配关系；不是平面示意图、不是多宫格、不是拼贴图、不是另一款产品。{exploded_view_component_constraints(product_name)}"),
+        ("exploded", "产品爆炸图", "1024x1792", f"单张立体写实爆炸图：等距轴测视角，所有同款产品零部件沿中心垂直装配轴从上到下真实分离并分层悬浮；部件必须有厚度、圆角、透视、真实阴影和 PBR 材质高光。展示外壳、唯一功能托盘、真实内部模块、连接件、紧固件和装配关系；不是平面示意图、不是多宫格、不是拼贴图、不是另一款产品。{runtime_exploded_view_component_constraints(product_name)}"),
         ("detail", "产品细节图", "1024x1024", "产品细节特写图，只放大同一款产品上的关键结构、材质、开启方式、按键、屏幕、提示灯或连接细节，微距摄影质感。"),
         ("three_view", "产品三视图", "1792x1024", "工业设计三视图，同一产品以统一比例展示正视图、侧视图和俯视图，严格对齐，白色背景，无透视变形，适合工程表达。"),
         ("board", "设计展板", "1600x2200", "设计展板，整合产品效果图、爆炸图、细节图、三视图、使用效果图、需求分析和功能结构映射；信息层级清晰，少文字，多图像，适合论文和开题展示。"),
@@ -320,7 +346,7 @@ def build_visual_assets_from_package(package: dict) -> list[dict]:
         }
         for index, (key, label, size, prompt) in enumerate(templates, start=1)
     ]
-    return ensure_visual_asset_constraints(product_name, assets)
+    return ensure_runtime_visual_asset_constraints(product_name, assets)
 
 
 def get_visual_assets(package: dict | None) -> list[dict]:
@@ -330,7 +356,7 @@ def get_visual_assets(package: dict | None) -> list[dict]:
     valid_assets = [asset for asset in visual_assets if str(asset.get("prompt", "")).strip()]
     valid_keys = {str(asset.get("key") or "") for asset in valid_assets}
     if len(valid_assets) >= 8 and {"render_1", "render_2", "usage_1", "usage_2"}.issubset(valid_keys):
-        return ensure_visual_asset_constraints(str(package.get("target_product") or "product"), valid_assets[:8])
+        return ensure_runtime_visual_asset_constraints(str(package.get("target_product") or "product"), valid_assets[:8])
     return build_visual_assets_from_package(package)
 
 
