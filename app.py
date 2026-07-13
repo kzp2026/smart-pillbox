@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from scripts.common import build_cleaned_dataframe
 from scripts.product_knowledge_base import (
@@ -30,7 +29,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-12-result-preview-v6"
+APP_VERSION = "2026-07-13-cloud-copy-control-v7"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
@@ -566,7 +565,7 @@ def build_all_prompts_text(assets: list[dict]) -> str:
 def render_copy_all_prompts_button(prompt_text: str, key: str) -> None:
     payload = json.dumps(prompt_text, ensure_ascii=False).replace("</", "<\\/")
     button_id = f"copy-all-prompts-{key}".replace("_", "-")
-    components.html(
+    st.html(
         f"""
         <button id="{button_id}" style="width:100%;height:38px;border:1px solid #c9daf8;border-radius:8px;background:#fff;color:#17345f;font-weight:650;cursor:pointer;">复制全部 prompt</button>
         <script>
@@ -583,7 +582,7 @@ def render_copy_all_prompts_button(prompt_text: str, key: str) -> None:
           }});
         </script>
         """,
-        height=46,
+        unsafe_allow_javascript=True,
     )
 
 

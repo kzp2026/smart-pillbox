@@ -109,11 +109,14 @@ class AppTabsTests(unittest.TestCase):
         for snippet in [
             "复制全部 prompt",
             "navigator.clipboard.writeText",
+            "st.html(",
+            "unsafe_allow_javascript=True",
             "reference_image=distinct_reference",
             "第二张产品效果图必须使用与产品效果图 1 不同的镜头构图",
             "第二张使用效果图必须使用与产品使用效果图 1 不同的使用动作或场景构图",
         ]:
             self.assertIn(snippet, app_source)
+        self.assertNotIn("components.html(", app_source)
 
     def test_main_app_keeps_scheme_generation_button_clickable(self) -> None:
         app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
