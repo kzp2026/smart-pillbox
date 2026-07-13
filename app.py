@@ -31,7 +31,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-13-cloud-database-diagnostics-v8"
+APP_VERSION = "2026-07-13-provider-error-details-v9"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
@@ -227,6 +227,10 @@ def generate_image_render(
         reference_path=reference_image,
         config=render_config,
     )
+    if not ok:
+        provider_error = module.format_image_generation_errors(module.IMAGE_GENERATION_EVENTS)
+        if provider_error:
+            image_config.setdefault("_provider_errors", []).append(provider_error)
     return output_path if ok and output_path.exists() else None
 
 
@@ -434,6 +438,7 @@ def generate_visual_asset_set(
     status,
 ) -> tuple[list[Path], list[str]]:
     """Generate an 8-view package and reject output that fails visual QA."""
+    image_config.pop("_provider_errors", None)
     module = load_design_visuals_module()
     assets = get_visual_assets(package)
     product_name = str(package.get("target_product") or "product")
@@ -667,6 +672,11 @@ def render_prompt_gallery(package: dict, image_config: dict, render_provider: st
                 store_latest_image_paths([])
                 failure_text = "；".join(validation_failures) if validation_failures else "图像服务未返回可验收图片"
                 st.error(f"视觉验收未通过：{failure_text}。不展示低质量回退图，请调整 Key、模型权限、余额或网络后重新生成。")
+                provider_errors = list(dict.fromkeys(image_config.get("_provider_errors", [])))
+                if provider_errors:
+                    error_heading = "阿里云返回的真实错误" if image_config.get("provider") == "dashscope" else "OpenAI 返回的真实错误"
+                    st.error(error_heading)
+                    st.code("\n\n".join(provider_errors), language="text")
 
     st.subheader("效果图预览")
     render_image_download_grid(get_latest_image_paths(), f"{button_key}_preview", assets)

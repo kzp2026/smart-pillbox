@@ -5,6 +5,7 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import subprocess
 import sys
 import time
@@ -567,6 +568,22 @@ def record_image_event(output_path: Path, stage: str, status: str, message: str)
             "message": str(message)[:900],
         }
     )
+
+
+def format_image_generation_errors(events: list[dict]) -> str:
+    """Keep provider diagnostics visible while redacting credential-shaped values."""
+    details: list[str] = []
+    for event in events:
+        if str(event.get("status") or "").lower() != "failed":
+            continue
+        message = str(event.get("message") or "").strip()
+        if not message:
+            continue
+        message = re.sub(r"\bsk-[A-Za-z0-9._-]+\b", "[已隐藏]", message)
+        detail = f"{event.get('image', 'image')} · {event.get('stage', 'provider')}\n{message}"
+        if detail not in details:
+            details.append(detail)
+    return "\n\n".join(details)
 
 
 def get_image_api_config() -> dict:

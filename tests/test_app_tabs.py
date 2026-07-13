@@ -146,6 +146,12 @@ class AppTabsTests(unittest.TestCase):
         self.assertIn("完整 8 条 prompt", app_source)
         self.assertIn("当前渲染服务尚未载入 API Key", app_source)
 
+    def test_image_generation_failure_displays_provider_error_details(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn("format_image_generation_errors", app_source)
+        self.assertIn("阿里云返回的真实错误", app_source)
+
     def test_legacy_result_page_keeps_legacy_stage_tabs_visible(self) -> None:
         page_source = (ROOT_DIR / "pages" / "03_旧版结果预览.py").read_text(encoding="utf-8")
         for label in [

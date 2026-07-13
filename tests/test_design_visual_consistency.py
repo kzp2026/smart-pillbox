@@ -43,6 +43,30 @@ class FakeResponse:
 
 
 class DesignVisualConsistencyTests(unittest.TestCase):
+    def test_dashscope_error_details_are_preserved_without_exposing_api_key(self) -> None:
+        module = load_design_visuals_module()
+        events = [
+            {
+                "image": "render.png",
+                "stage": "dashscope_text",
+                "status": "failed",
+                "message": (
+                    'DashScope HTTP 403: {"code":"Arrearage","message":'
+                    '"Access denied due to outstanding payment",'
+                    '"request_id":"req-123","api_key":"sk-sensitive"}'
+                ),
+            }
+        ]
+
+        details = module.format_image_generation_errors(events)
+
+        self.assertIn("DashScope HTTP 403", details)
+        self.assertIn("Arrearage", details)
+        self.assertIn("Access denied due to outstanding payment", details)
+        self.assertIn("req-123", details)
+        self.assertNotIn("sk-sensitive", details)
+        self.assertIn("[已隐藏]", details)
+
     def test_prompts_share_same_product_consistency_lock(self) -> None:
         module = load_design_visuals_module()
         req_df = pd.DataFrame(
