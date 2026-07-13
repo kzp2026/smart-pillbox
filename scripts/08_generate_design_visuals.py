@@ -40,6 +40,15 @@ PALETTE = {
 
 DEFAULT_DASHSCOPE_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
 IMAGE_GENERATION_EVENTS: list[dict[str, str]] = []
+DASHSCOPE_LAST_REQUEST_AT: dict[str, float] = {}
+
+
+class DashScopeRequestError(ValueError):
+    def __init__(self, status_code: int, body: str, retry_after: float | None = None):
+        super().__init__(f"DashScope HTTP {status_code}: {body[:1000]}")
+        self.status_code = status_code
+        self.body = body
+        self.retry_after = retry_after
 
 
 # =========================
@@ -660,21 +669,24 @@ def dashscope_image_size(size: str, model: str = "") -> str:
 
 def is_dashscope_multimodal_model(model: str) -> bool:
     normalized = model.strip().lower()
-    return normalized.startswith("qwen-image")
+    return normalized.startswith(("qwen-image", "wan2.7-image"))
 
 
 def supports_dashscope_reference_image(model: str) -> bool:
     normalized = model.strip().lower()
-    return normalized.startswith("qwen-image-2.0") or "edit" in normalized
+    return normalized.startswith(("qwen-image-2.0", "wan2.7-image")) or "edit" in normalized
 
 
 def dashscope_parameters(size: str, config: dict, n: int = 1) -> dict:
+    model = str(config.get("model", "")).strip().lower()
     parameters: dict[str, object] = {
         "size": dashscope_image_size(size, str(config.get("model", ""))),
         "n": n,
-        "prompt_extend": bool(config.get("prompt_extend", False)),
         "watermark": False,
     }
+    if model.startswith("wan2.7-image"):
+        return parameters
+    parameters["prompt_extend"] = bool(config.get("prompt_extend", False))
     negative_prompt = str(config.get("negative_prompt", "")).strip()
     if negative_prompt:
         parameters["negative_prompt"] = negative_prompt
@@ -682,6 +694,32 @@ def dashscope_parameters(size: str, config: dict, n: int = 1) -> dict:
     if seed.isdigit():
         parameters["seed"] = int(seed)
     return parameters
+
+
+def dashscope_min_request_interval(model: str) -> float:
+    normalized = model.strip().lower()
+    if normalized.startswith(("qwen-image-2.0-pro", "qwen-image-max", "qwen-image-edit-max")):
+        return 31.0
+    if normalized.startswith("wan2.7-image"):
+        return 0.22
+    if normalized.startswith(("qwen-image", "qwen-image-edit")):
+        return 0.55
+    return 0.0
+
+
+def wait_for_dashscope_rate_slot(config: dict) -> None:
+    if not config.get("enforce_rate_limit"):
+        return
+    model = str(config.get("model", ""))
+    configured_interval = config.get("request_interval")
+    interval = float(configured_interval) if configured_interval is not None else dashscope_min_request_interval(model)
+    if interval <= 0:
+        return
+    last_request_at = DASHSCOPE_LAST_REQUEST_AT.get(model, 0.0)
+    remaining = interval - (time.monotonic() - last_request_at)
+    if remaining > 0:
+        time.sleep(remaining)
+    DASHSCOPE_LAST_REQUEST_AT[model] = time.monotonic()
 
 
 def image_to_data_url(image_path: Path) -> str:
@@ -726,9 +764,12 @@ def build_retry_variation_prompt(prompt: str, asset_key: str, attempt: int) -> s
 
 def dashscope_reference_request(payload: dict, config: dict) -> dict:
     timeout = max(60, int(config.get("reference_timeout") or os.getenv("DASHSCOPE_REFERENCE_TIMEOUT_SECONDS", "240")))
-    attempts = min(3, max(1, int(config.get("reference_attempts") or os.getenv("DASHSCOPE_REFERENCE_ATTEMPTS", "2"))))
-    last_error: urllib.error.URLError | TimeoutError | None = None
-    for attempt in range(1, attempts + 1):
+    transport_attempts = min(3, max(1, int(config.get("reference_attempts") or os.getenv("DASHSCOPE_REFERENCE_ATTEMPTS", "2"))))
+    rate_limit_attempts = min(6, max(1, int(config.get("rate_limit_attempts") or os.getenv("DASHSCOPE_RATE_LIMIT_ATTEMPTS", "4"))))
+    transport_failures = 0
+    rate_limit_failures = 0
+    while True:
+        wait_for_dashscope_rate_slot(config)
         try:
             return dashscope_request_json(
                 config["multimodal_url"],
@@ -737,13 +778,24 @@ def dashscope_reference_request(payload: dict, config: dict) -> dict:
                 async_request=False,
                 timeout=timeout,
             )
-        except (urllib.error.URLError, TimeoutError) as exc:
-            last_error = exc
-            if attempt >= attempts:
+        except DashScopeRequestError as exc:
+            if exc.status_code != 429 or rate_limit_failures >= rate_limit_attempts - 1:
                 raise
-            time.sleep(min(2 ** (attempt - 1), 4))
-    assert last_error is not None
-    raise last_error
+            rate_limit_failures += 1
+            configured_wait = config.get("rate_limit_wait")
+            retry_wait = (
+                float(configured_wait)
+                if configured_wait is not None
+                else exc.retry_after
+                if exc.retry_after is not None
+                else max(1.0, dashscope_min_request_interval(str(config.get("model", ""))))
+            )
+            time.sleep(max(0.0, retry_wait))
+        except (urllib.error.URLError, TimeoutError) as exc:
+            transport_failures += 1
+            if transport_failures >= transport_attempts:
+                raise
+            time.sleep(min(2 ** (transport_failures - 1), 4))
 
 
 def extract_dashscope_image_url(payload: dict) -> str:
@@ -778,7 +830,12 @@ def dashscope_request_json(url: str, api_key: str, payload: dict | None = None, 
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
-        raise ValueError(f"DashScope HTTP {e.code}: {body[:1000]}") from e
+        retry_after_value = e.headers.get("Retry-After") if e.headers else None
+        try:
+            retry_after = float(retry_after_value) if retry_after_value is not None else None
+        except (TypeError, ValueError):
+            retry_after = None
+        raise DashScopeRequestError(e.code, body, retry_after=retry_after) from e
 
 
 def download_image_url(image_url: str, output_path: Path) -> bool:

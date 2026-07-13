@@ -31,10 +31,12 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-13-reference-upload-reliability-v10"
+APP_VERSION = "2026-07-13-wan27-rate-limit-v11"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
+    "wan2.7-image-pro",
     DEFAULT_IMAGE_MODEL,
+    "qwen-image-2.0",
     "qwen-image-2.0-pro",
     "qwen-image-max",
     "qwen-image-plus",
@@ -179,6 +181,7 @@ def build_dashscope_config(api_key: str, model: str) -> dict:
         "quality": "standard",
         "custom_base_url": bool(os.getenv("DASHSCOPE_IMAGE_API_URL")),
         "force_reference_model": model == "qwen-image",
+        "enforce_rate_limit": True,
         "prompt_extend": False,
         "negative_prompt": module.get_image_api_config().get("negative_prompt", ""),
         "seed": "",
@@ -213,10 +216,11 @@ def generate_image_render(
     image_index: int = 1,
     asset: dict | None = None,
     reference_image: Path | None = None,
+    module=None,
 ) -> Path | None:
     if not image_config.get("api_key"):
         return None
-    module = load_design_visuals_module()
+    module = module or load_design_visuals_module()
     asset = asset or {"key": f"image_{image_index:02d}", "label": f"效果图{image_index}", "size": "1024x1024"}
     output_path = visual_asset_output_path(target_product, asset, image_index)
     render_config = {**image_config, "strict_reference": reference_image is not None}
@@ -409,6 +413,7 @@ def _generate_visual_asset_set_legacy(
             index,
             asset=asset,
             reference_image=reference_image,
+            module=module,
         )
         if generated_image_path:
             output_path = generated_image_path
@@ -474,6 +479,7 @@ def generate_visual_asset_set(
                 index,
                 asset=asset,
                 reference_image=reference_image,
+                module=module,
             )
             if not generated_image_path:
                 final_reason = "图像服务未返回图片，请检查模型权限、余额或网络"
@@ -516,7 +522,13 @@ def generate_visual_asset_set(
             if not any(item.startswith(f"{label}：") for item in failures):
                 failures.append(f"{label}：未通过视觉一致性验收")
     if failures:
-        return [], failures
+        progress.progress(100)
+        partial_paths = [
+            generated_paths[str(asset.get("key") or f"image_{index}")]
+            for index, asset in enumerate(assets, start=1)
+            if str(asset.get("key") or f"image_{index}") in generated_paths
+        ]
+        return partial_paths, failures
 
     if board_asset:
         index, asset = board_asset
@@ -567,7 +579,15 @@ def render_image_download_grid(image_paths: list[Path], key_prefix: str, assets:
     assets = assets or []
     columns = st.columns(3)
     for index, image_path in enumerate(image_paths[:8], start=1):
-        label = str(assets[index - 1].get("label")) if index - 1 < len(assets) else f"效果图 {index}"
+        matched_asset = next(
+            (
+                asset
+                for asset in assets
+                if str(asset.get("key") or "") and f"_{asset.get('key')}_" in image_path.name
+            ),
+            assets[index - 1] if index - 1 < len(assets) else {},
+        )
+        label = str(matched_asset.get("label") or f"效果图 {index}")
         with columns[(index - 1) % 3]:
             st.image(str(image_path), caption=label, use_container_width=True)
             st.download_button(
@@ -635,7 +655,10 @@ def _render_prompt_gallery_legacy(package: dict, image_config: dict, render_prov
         generated_paths, validation_failures = generate_visual_asset_set(package, image_config, progress, status)
         if generated_paths:
             store_latest_image_paths(generated_paths)
-            st.success(f"视觉一致性基础验收通过，已生成 {len(generated_paths)} 张独立设计图。")
+            if validation_failures:
+                st.warning(f"已保留 {len(generated_paths)} 张通过验收的效果图，其余图片可稍后补生成。")
+            else:
+                st.success(f"视觉一致性基础验收通过，已生成 {len(generated_paths)} 张独立设计图。")
             render_image_download_grid(get_latest_image_paths(), f"{button_key}_generated", assets)
         else:
             store_latest_image_paths([])
@@ -668,11 +691,15 @@ def render_prompt_gallery(package: dict, image_config: dict, render_provider: st
             generated_paths, validation_failures = generate_visual_asset_set(package, image_config, progress, status)
             if generated_paths:
                 store_latest_image_paths(generated_paths)
-                st.success(f"视觉一致性基础验收通过，已生成 {len(generated_paths)} 张独立设计图。")
+                if validation_failures:
+                    st.warning(f"已保留 {len(generated_paths)} 张通过验收的效果图，其余图片可稍后补生成。")
+                else:
+                    st.success(f"视觉一致性基础验收通过，已生成 {len(generated_paths)} 张独立设计图。")
             else:
                 store_latest_image_paths([])
                 failure_text = "；".join(validation_failures) if validation_failures else "图像服务未返回可验收图片"
                 st.error(f"视觉验收未通过：{failure_text}。不展示低质量回退图，请调整 Key、模型权限、余额或网络后重新生成。")
+            if validation_failures:
                 provider_errors = list(dict.fromkeys(image_config.get("_provider_errors", [])))
                 if provider_errors:
                     error_heading = "阿里云返回的真实错误" if image_config.get("provider") == "dashscope" else "OpenAI 返回的真实错误"

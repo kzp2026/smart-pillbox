@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -40,6 +41,85 @@ class FakeResponse:
 
 
 class RenderProviderAndArchiveTests(unittest.TestCase):
+    def test_wan_27_pro_uses_multimodal_reference_generation(self) -> None:
+        module = load_design_visuals_module()
+        requests = []
+
+        def fake_urlopen(request, timeout=0):
+            requests.append(request)
+            body = json.loads(request.data.decode("utf-8"))
+            content = body["input"]["messages"][0]["content"]
+            self.assertEqual(body["model"], "wan2.7-image-pro")
+            self.assertEqual(body["parameters"]["size"], "1024*1024")
+            self.assertNotIn("prompt_extend", body["parameters"])
+            self.assertNotIn("negative_prompt", body["parameters"])
+            self.assertTrue(any("image" in item for item in content))
+            return FakeResponse(
+                {"output": {"choices": [{"message": {"content": [{"image": "https://example.com/wan.png"}]}}]}}
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reference_path = root / "reference.png"
+            output_path = root / "output.png"
+            reference_path.write_bytes(b"PNG")
+            config = {
+                "provider": "dashscope",
+                "api_key": "test-key",
+                "model": "wan2.7-image-pro",
+                "multimodal_url": "https://example.com/multimodal-generation/generation",
+                "strict_reference": True,
+            }
+            with patch.object(module, "image_to_data_url", return_value="data:image/png;base64,UE5H"):
+                with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                    with patch("urllib.request.urlretrieve", side_effect=lambda url, filename: Path(filename).write_bytes(b"PNG")):
+                        ok = module.generate_ai_image(
+                            "same product reference", output_path, "1024x1024", reference_path=reference_path, config=config
+                        )
+
+        self.assertTrue(ok)
+        self.assertEqual(len(requests), 1)
+
+    def test_dashscope_rate_quota_is_waited_and_retried(self) -> None:
+        module = load_design_visuals_module()
+        attempts = []
+
+        def fake_urlopen(request, timeout=0):
+            attempts.append(request)
+            if len(attempts) == 1:
+                body = io.BytesIO(b'{"code":"Throttling.RateQuota","message":"Requests rate limit exceeded"}')
+                raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {"Retry-After": "0"}, body)
+            return FakeResponse(
+                {"output": {"choices": [{"message": {"content": [{"image": "https://example.com/retry.png"}]}}]}}
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "output.png"
+            config = {
+                "provider": "dashscope",
+                "api_key": "test-key",
+                "model": "qwen-image-2.0-pro-2026-06-22",
+                "multimodal_url": "https://example.com/multimodal-generation/generation",
+                "rate_limit_attempts": 2,
+                "rate_limit_wait": 0,
+            }
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                with patch("urllib.request.urlretrieve", side_effect=lambda url, filename: Path(filename).write_bytes(b"PNG")):
+                    with patch("time.sleep") as sleep:
+                        ok = module.generate_dashscope_multimodal_image(
+                            "product render", output_path, "1024x1024", config, reference_path=None
+                        )
+
+        self.assertTrue(ok)
+        self.assertEqual(len(attempts), 2)
+        sleep.assert_called()
+
+    def test_dashscope_model_pacing_matches_provider_quota(self) -> None:
+        module = load_design_visuals_module()
+
+        self.assertGreaterEqual(module.dashscope_min_request_interval("qwen-image-2.0-pro-2026-06-22"), 30)
+        self.assertLessEqual(module.dashscope_min_request_interval("wan2.7-image-pro"), 0.25)
+
     def test_dashscope_provider_uses_reference_image_model_by_default(self) -> None:
         module = load_design_visuals_module()
         requests = []

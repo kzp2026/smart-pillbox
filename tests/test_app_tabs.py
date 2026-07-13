@@ -67,6 +67,12 @@ class AppTabsTests(unittest.TestCase):
             "生成记录保存失败",
         ]:
             self.assertIn(snippet, app_source)
+
+    def test_main_app_offers_wan_27_pro_for_high_throughput_image_generation(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn('"wan2.7-image-pro"', app_source)
+        self.assertLess(app_source.index('"wan2.7-image-pro"'), app_source.index("DEFAULT_IMAGE_MODEL,"))
         self.assertNotIn("生图提示词", app_source)
 
     def test_main_app_offers_openai_rendering_without_flattening_exploded_view(self) -> None:
