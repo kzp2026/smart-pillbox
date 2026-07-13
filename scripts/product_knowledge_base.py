@@ -98,19 +98,19 @@ VISUAL_ASSET_TEMPLATES = [
         "key": "board",
         "label": "设计展板",
         "size": "1600x2200",
-        "prompt": "设计展板，整合产品效果图、爆炸图、细节图、三视图、使用效果图、需求分析和功能结构映射；信息层级清晰，少文字，多图像，适合论文和开题展示。",
+        "prompt": "设计展板，整合产品效果图、爆炸图、细节图、三视图、使用效果图、需求分析、功能结构映射和规格信息；从产品效果图提取产品主色与材质气质，使用低饱和协调背景和有对比度的强调色，整体色调统一且美观；版式根据图片横竖比、内容密度和视觉重心自适应，不套用固定模板。产品主视觉最大，结构与场景图次之，文字克制、层级清晰、留白充足，适合论文和开题展示。",
     },
     {
         "key": "usage_1",
         "label": "产品使用效果图 1",
         "size": "1024x1024",
-        "prompt": "单张真实使用场景图，目标用户在自然生活环境中使用同一款产品，人物动作、产品尺度、空间关系和核心功能表达真实合理。",
+        "prompt": "单张真实使用场景图，产品稳定平放在桌面，透明上盖由铰链自行支撑；目标用户在旁边查看提醒或手机，双手完整可见，并与盒体、透明上盖、药格和药片保持明显可见间距，不握持、不扶盖、不伸入药格。手和手指不得穿过产品轮廓、透明上盖或内部结构，人物动作、产品尺度、空间关系和核心功能表达真实合理。",
     },
     {
         "key": "usage_2",
         "label": "产品使用效果图 2",
         "size": "1024x1024",
-        "prompt": "单张真实使用场景图，从另一自然视角展示同一款产品被目标用户操作或提醒；产品轮廓、材料、分格数量和核心交互区必须与母版完全一致。",
+        "prompt": "单张真实使用场景图，从另一自然视角展示同一款产品被目标用户操作或提醒；如画面中有人手，只允许自然接触不透明外壳侧边或实体按键，五指和关节完整，不得穿过盒体、透明上盖、药格或药片。产品轮廓、材料、分格数量和核心交互区必须与母版完全一致。",
     },
 ]
 
@@ -141,6 +141,30 @@ def exploded_view_component_constraints(product_name: str) -> str:
     )
 
 
+def usage_scene_geometry_constraints(asset_key: str) -> str:
+    """Keep human-product contact physically plausible in generated usage scenes."""
+    if asset_key == "usage_1":
+        return (
+            "人物与产品几何关系硬约束：产品必须稳定平放在桌面，透明上盖仅由真实铰链支撑；"
+            "人物双手完整可见并与产品外壳、透明上盖、药格及药片保持明显可见间距，"
+            "不得握持产品、扶住上盖或把手伸入药格；任何手指都不得穿过、嵌入或遮断产品边缘和透明材质。"
+        )
+    if asset_key == "usage_2":
+        return (
+            "人物与产品几何关系硬约束：若出现手部，只允许五指完整、关节自然地接触不透明外壳侧边或实体按键；"
+            "不得接触或穿过透明上盖、药格、药片及产品内部，不得出现多余、粘连、畸形或被产品截断的手指。"
+        )
+    return ""
+
+
+def adaptive_board_style_constraints() -> str:
+    return (
+        "展板视觉自适应约束：从产品效果图提取产品主色与材质气质，使用低饱和协调背景、清晰文字对比和适量强调色；"
+        "根据图片横竖比、内容密度和视觉重心自适应安排主视觉、爆炸图、细节、三视图、场景、需求、功能和规格模块，"
+        "不得机械复制固定网格模板，必须保持美观、留白和信息层级。"
+    )
+
+
 def ensure_visual_asset_constraints(target_product: str, assets: list[dict]) -> list[dict]:
     """Upgrade saved visual prompts without mutating historic generation records."""
     upgraded: list[dict] = []
@@ -150,6 +174,12 @@ def ensure_visual_asset_constraints(target_product: str, assets: list[dict]) -> 
         prompt = clean_text(current.get("prompt", ""))
         if current.get("key") == "exploded" and "爆炸图组件真实性约束" not in prompt:
             current["prompt"] = f"{prompt}\n\n{exploded_constraints}".strip()
+        asset_key = clean_text(current.get("key", ""))
+        usage_constraints = usage_scene_geometry_constraints(asset_key)
+        if usage_constraints and "人物与产品几何关系硬约束" not in prompt:
+            current["prompt"] = f"{current.get('prompt', prompt)}\n\n{usage_constraints}".strip()
+        if asset_key == "board" and "展板视觉自适应约束" not in prompt:
+            current["prompt"] = f"{current.get('prompt', prompt)}\n\n{adaptive_board_style_constraints()}".strip()
         upgraded.append(current)
     return upgraded
 

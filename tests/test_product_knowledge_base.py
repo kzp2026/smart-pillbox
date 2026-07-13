@@ -7,7 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.product_knowledge_base import ProductKnowledgeBase, clean_text, generate_design_package, to_json_safe
+from scripts.product_knowledge_base import (
+    ProductKnowledgeBase,
+    VISUAL_ASSET_TEMPLATES,
+    clean_text,
+    generate_design_package,
+    to_json_safe,
+)
 from scripts.industrial_design_prompt import PROMPT_SECTIONS, build_industrial_design_prompt
 
 
@@ -15,6 +21,14 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
 class IndustrialDesignPromptModulePresenceTests(unittest.TestCase):
+    def test_visual_templates_include_safe_usage_geometry_and_adaptive_board_style(self) -> None:
+        templates = {item["key"]: item["prompt"] for item in VISUAL_ASSET_TEMPLATES}
+
+        self.assertIn("可见间距", templates["usage_1"])
+        self.assertIn("不得穿过", templates["usage_1"])
+        self.assertIn("提取产品主色", templates["board"])
+        self.assertIn("自适应", templates["board"])
+
     def test_industrial_design_prompt_module_is_available(self) -> None:
         self.assertTrue((ROOT_DIR / "scripts" / "industrial_design_prompt.py").exists())
 

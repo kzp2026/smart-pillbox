@@ -174,6 +174,32 @@ class DesignVisualConsistencyTests(unittest.TestCase):
         self.assertTrue(all(len(note) <= 36 for note in notes))
         self.assertFalse(any("主题0" in note or "主题关键词" in note for note in notes))
 
+    def test_usage_retry_prevents_hand_product_intersections(self) -> None:
+        module = load_design_visuals_module()
+
+        retry_prompt = module.build_retry_variation_prompt("base prompt", "usage_1", 2)
+
+        self.assertIn("visible air gap", retry_prompt)
+        self.assertIn("do not touch", retry_prompt)
+        self.assertIn("transparent lid", retry_prompt)
+
+    def test_board_palette_tracks_product_color(self) -> None:
+        module = load_design_visuals_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            green_path = root / "green.png"
+            blue_path = root / "blue.png"
+            Image.new("RGB", (320, 240), "#78A98A").save(green_path)
+            Image.new("RGB", (320, 240), "#668FC4").save(blue_path)
+
+            green_palette = module.derive_board_palette({"render": green_path})
+            blue_palette = module.derive_board_palette({"render": blue_path})
+
+        self.assertNotEqual(green_palette["accent"], blue_palette["accent"])
+        self.assertNotEqual(green_palette["background"], blue_palette["background"])
+        self.assertGreater(green_palette["accent_rgb"][1], green_palette["accent_rgb"][2])
+        self.assertGreater(blue_palette["accent_rgb"][2], blue_palette["accent_rgb"][1])
+
     def test_pm_review_records_cover_all_design_images(self) -> None:
         module = load_design_visuals_module()
         with tempfile.TemporaryDirectory() as temp_dir:

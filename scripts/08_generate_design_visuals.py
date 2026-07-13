@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import colorsys
 import io
 import json
 import os
@@ -14,7 +15,7 @@ import urllib.request
 from pathlib import Path
 
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
 
 from common import ensure_output_dir, resolve_latest_output_path
 
@@ -139,12 +140,90 @@ def rounded_rect(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], fill
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 
-def draw_grid(draw: ImageDraw.ImageDraw, width: int, height: int, step: int = 28) -> None:
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    return "#{:02X}{:02X}{:02X}".format(*rgb)
+
+
+def _hls_color(hue: float, lightness: float, saturation: float) -> tuple[int, int, int]:
+    red, green, blue = colorsys.hls_to_rgb(hue, lightness, saturation)
+    return tuple(round(channel * 255) for channel in (red, green, blue))
+
+
+def derive_board_palette(images: dict[str, Path]) -> dict[str, object]:
+    """Extract a restrained board palette from product-only renders."""
+    candidates = [images.get(key) for key in ("render", "render_1", "detail", "exploded")]
+    ranked_colors: list[tuple[float, float, float, float]] = []
+    for image_path in candidates:
+        if not image_path or not image_path.exists():
+            continue
+        try:
+            with Image.open(image_path) as opened:
+                source = opened.convert("RGB")
+            source.thumbnail((180, 180), Image.Resampling.LANCZOS)
+            quantized = source.quantize(colors=16, method=Image.Quantize.MEDIANCUT).convert("RGB")
+            for count, rgb in quantized.getcolors(maxcolors=source.width * source.height) or []:
+                hue, lightness, saturation = colorsys.rgb_to_hls(*(channel / 255 for channel in rgb))
+                if lightness < 0.09 or lightness > 0.94 or saturation < 0.10:
+                    continue
+                score = count * saturation * max(0.25, 1.0 - abs(lightness - 0.52))
+                ranked_colors.append((score, hue, lightness, saturation))
+            if ranked_colors:
+                break
+        except Exception:
+            continue
+
+    if ranked_colors:
+        _, hue, _, source_saturation = max(ranked_colors, key=lambda item: item[0])
+        accent_saturation = min(0.62, max(0.34, source_saturation))
+    else:
+        hue, accent_saturation = 0.43, 0.34
+
+    accent_rgb = _hls_color(hue, 0.40, accent_saturation)
+    colors = {
+        "background": _rgb_to_hex(_hls_color(hue, 0.965, 0.13)),
+        "panel": _rgb_to_hex(_hls_color(hue, 0.992, 0.05)),
+        "panel_alt": _rgb_to_hex(_hls_color(hue, 0.925, 0.17)),
+        "accent": _rgb_to_hex(accent_rgb),
+        "accent_soft": _rgb_to_hex(_hls_color(hue, 0.82, 0.28)),
+        "ink": _rgb_to_hex(_hls_color(hue, 0.18, 0.18)),
+        "muted": _rgb_to_hex(_hls_color(hue, 0.42, 0.10)),
+        "line": _rgb_to_hex(_hls_color(hue, 0.80, 0.14)),
+        "grid_minor": _rgb_to_hex(_hls_color(hue, 0.90, 0.10)),
+        "grid_major": _rgb_to_hex(_hls_color(hue, 0.84, 0.14)),
+        "accent_rgb": accent_rgb,
+    }
+    return colors
+
+
+def choose_hero_text_side(image_path: Path) -> str:
+    """Place hero copy on the quieter/brighter outer edge of the product render."""
+    if not image_path.exists():
+        return "left"
+    try:
+        with Image.open(image_path) as opened:
+            source = opened.convert("L")
+        source.thumbnail((320, 220), Image.Resampling.LANCZOS)
+        edge_width = max(1, source.width // 3)
+        left_brightness = ImageStat.Stat(source.crop((0, 0, edge_width, source.height))).mean[0]
+        right_brightness = ImageStat.Stat(source.crop((source.width - edge_width, 0, source.width, source.height))).mean[0]
+        return "left" if left_brightness >= right_brightness else "right"
+    except Exception:
+        return "left"
+
+
+def draw_grid(
+    draw: ImageDraw.ImageDraw,
+    width: int,
+    height: int,
+    step: int = 28,
+    palette: dict[str, object] | None = None,
+) -> None:
+    palette = palette or {"grid_minor": "#E2E8EC", "grid_major": "#D2DCE1"}
     for x in range(0, width + 1, step):
-        color = "#E2D9C8" if x % (step * 4) else "#D1C5B2"
+        color = palette["grid_minor"] if x % (step * 4) else palette["grid_major"]
         draw.line((x, 0, x, height), fill=color, width=1)
     for y in range(0, height + 1, step):
-        color = "#E2D9C8" if y % (step * 4) else "#D1C5B2"
+        color = palette["grid_minor"] if y % (step * 4) else palette["grid_major"]
         draw.line((0, y, width, y), fill=color, width=1)
 
 
@@ -154,11 +233,13 @@ def paste_image_cover(
     image_path: Path,
     box: tuple[int, int, int, int],
     fallback: str,
+    palette: dict[str, object] | None = None,
 ) -> None:
+    palette = palette or {"panel_alt": "#EEF3F5", "line": "#C7D2D8", "muted": "#64737B"}
     left, top, right, bottom = box
     if not image_path.exists():
-        rounded_rect(draw, box, "#EFE8DA", "#C9B99E", radius=18)
-        draw.text(((left + right) // 2, (top + bottom) // 2), fallback, font=load_font(18, bold=True), fill="#7A6338", anchor="mm")
+        rounded_rect(draw, box, str(palette["panel_alt"]), str(palette["line"]), radius=18)
+        draw.text(((left + right) // 2, (top + bottom) // 2), fallback, font=load_font(18, bold=True), fill=str(palette["muted"]), anchor="mm")
         return
     try:
         with Image.open(image_path) as opened:
@@ -172,8 +253,30 @@ def paste_image_cover(
         cropped = resized.crop((crop_left, crop_top, crop_left + target_width, crop_top + target_height))
         canvas.paste(cropped, (left, top))
     except Exception:
-        rounded_rect(draw, box, "#EFE8DA", "#C9B99E", radius=18)
-        draw.text(((left + right) // 2, (top + bottom) // 2), "图片读取失败", font=load_font(16), fill="#7A6338", anchor="mm")
+        rounded_rect(draw, box, str(palette["panel_alt"]), str(palette["line"]), radius=18)
+        draw.text(((left + right) // 2, (top + bottom) // 2), "图片读取失败", font=load_font(16), fill=str(palette["muted"]), anchor="mm")
+
+
+def paste_image_contain(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    image_path: Path,
+    box: tuple[int, int, int, int],
+    fallback: str,
+    palette: dict[str, object],
+) -> None:
+    left, top, right, bottom = box
+    draw.rectangle(box, fill=str(palette["panel"]))
+    if not image_path.exists():
+        draw.text(((left + right) // 2, (top + bottom) // 2), fallback, font=load_font(18, bold=True), fill=str(palette["muted"]), anchor="mm")
+        return
+    try:
+        with Image.open(image_path) as opened:
+            source = opened.convert("RGB")
+        fitted = ImageOps.contain(source, (right - left, bottom - top), Image.Resampling.LANCZOS)
+        canvas.paste(fitted, (left + (right - left - fitted.width) // 2, top + (bottom - top - fitted.height) // 2))
+    except Exception:
+        draw.text(((left + right) // 2, (top + bottom) // 2), "图片读取失败", font=load_font(16), fill=str(palette["muted"]), anchor="mm")
 
 
 def draw_section_title(
@@ -183,13 +286,15 @@ def draw_section_title(
     number: str,
     title: str,
     english: str = "",
+    palette: dict[str, object] | None = None,
 ) -> None:
-    accent = "#8A6A28"
-    draw.ellipse((x, y + 7, x + 26, y + 33), fill="#D0C2A5")
+    palette = palette or {"accent": "#356D66", "accent_soft": "#B8D6D1", "ink": "#22302F", "muted": "#667573"}
+    accent = str(palette["accent"])
+    draw.ellipse((x, y + 7, x + 26, y + 33), fill=str(palette["accent_soft"]))
     draw.text((x + 38, y), number, font=load_font(32, bold=True), fill=accent)
-    draw.text((x + 102, y + 5), title, font=load_font(25, bold=True), fill="#42351E")
+    draw.text((x + 102, y + 5), title, font=load_font(25, bold=True), fill=str(palette["ink"]))
     if english:
-        draw.text((x + 250, y + 13), f"/ {english}", font=load_font(17), fill="#6C604F")
+        draw.text((x + 250, y + 13), f"/ {english}", font=load_font(17), fill=str(palette["muted"]))
 
 
 def draw_material_palette(draw: ImageDraw.ImageDraw, left: int, top: int) -> None:
@@ -272,12 +377,14 @@ def paste_image_panel(
     image_path: Path,
     box: tuple[int, int, int, int],
     title: str,
+    palette: dict[str, object] | None = None,
 ) -> None:
+    palette = palette or {"panel": "#FFFFFF", "line": "#CDD7DC", "ink": "#243231", "muted": "#6C7A78"}
     left, top, right, bottom = box
-    rounded_rect(draw, box, "#FFFDF7", "#CBBCA2", radius=12)
-    draw.text((left + 18, top + 14), title, font=load_font(18, bold=True), fill="#4B3A1E")
+    rounded_rect(draw, box, str(palette["panel"]), str(palette["line"]), radius=12)
+    draw.text((left + 18, top + 14), title, font=load_font(18, bold=True), fill=str(palette["ink"]))
     if not image_path.exists():
-        draw.text(((left + right) // 2, (top + bottom) // 2), "图片尚未生成", font=load_font(15), fill="#8B7B60", anchor="mm")
+        draw.text(((left + right) // 2, (top + bottom) // 2), "图片尚未生成", font=load_font(15), fill=str(palette["muted"]), anchor="mm")
         return
 
     try:
@@ -290,7 +397,7 @@ def paste_image_panel(
         y = top + 58 + (target_height - fitted.height) // 2
         canvas.paste(fitted, (x, y))
     except Exception:
-        draw.text(((left + right) // 2, (top + bottom) // 2), "图片读取失败", font=load_font(15), fill="#8B7B60", anchor="mm")
+        draw.text(((left + right) // 2, (top + bottom) // 2), "图片读取失败", font=load_font(15), fill=str(palette["muted"]), anchor="mm")
 
 
 def build_compact_board_notes(product_name: str, req_df: pd.DataFrame, topic_df: pd.DataFrame) -> list[str]:
@@ -317,55 +424,73 @@ def build_compact_board_notes(product_name: str, req_df: pd.DataFrame, topic_df:
 
 
 def create_board(path: Path, images: dict[str, Path], req_df: pd.DataFrame, topic_df: pd.DataFrame, product_name: str) -> None:
-    """生成产品设计展板"""
+    """Generate an adaptive product board without locking every product to one color template."""
     w, h = 1600, 2200
-    img = Image.new("RGB", (w, h), "#F6F1E7")
+    palette = derive_board_palette(images)
+    img = Image.new("RGB", (w, h), str(palette["background"]))
     draw = ImageDraw.Draw(img)
-    draw_grid(draw, w, h, step=26)
+    draw_grid(draw, w, h, step=26, palette=palette)
     font_body = load_font(17)
 
-    paste_image_cover(img, draw, images["usage"] if images["usage"].exists() else images["render"], (0, 0, w, 520), "产品场景效果图")
-    overlay = Image.new("RGBA", (w, 520), (246, 241, 231, 138))
-    img.paste(overlay, (0, 0), overlay)
-    draw.rectangle((0, 0, 620, 520), fill=(246, 241, 231))
-    draw.text((58, 70), product_name, font=load_font(70, bold=True), fill="#473211")
-    draw.text((60, 158), "产品设计展板", font=load_font(50, bold=True), fill="#735721")
-    draw.text((64, 236), "用户评论驱动的产品创新设计", font=load_font(24), fill="#55452C")
-    draw.line((60, 292, 510, 292), fill="#93712C", width=3)
-    draw.text((64, 330), "从真实评论中提取需求，转化为功能、结构与场景方案。", font=load_font(20), fill="#4C402F")
-    draw.text((64, 374), "Comment → Need → Structure → Rendering", font=load_font(18), fill="#7B6A54")
+    hero_path = images.get("render", images.get("usage", Path("missing")))
+    hero_side = choose_hero_text_side(hero_path)
+    if hero_side == "left":
+        text_left, text_right = 0, 620
+        image_box = (600, 18, 1580, 502)
+    else:
+        text_left, text_right = 980, 1600
+        image_box = (20, 18, 1000, 502)
+    draw.rectangle((0, 0, w, 520), fill=str(palette["panel"]))
+    paste_image_contain(img, draw, hero_path, image_box, "产品主视觉", palette)
+    draw.rectangle((text_left, 0, text_right, 520), fill=str(palette["background"]))
+    copy_x = text_left + 58
+    draw.rectangle((copy_x, 54, copy_x + 8, 448), fill=str(palette["accent"]))
+    draw.text((copy_x + 30, 68), product_name, font=load_font(70, bold=True), fill=str(palette["ink"]))
+    draw.text((copy_x + 32, 160), "产品设计展板", font=load_font(50, bold=True), fill=str(palette["accent"]))
+    draw.text((copy_x + 34, 238), "用户评论驱动的产品创新设计", font=load_font(24), fill=str(palette["ink"]))
+    draw.line((copy_x + 34, 294, copy_x + 480, 294), fill=str(palette["accent_soft"]), width=4)
+    draw_wrapped(
+        draw,
+        (copy_x + 34, 330),
+        "从真实评论中提取需求，转化为功能、结构与场景方案。",
+        load_font(20),
+        str(palette["ink"]),
+        480,
+        line_gap=8,
+    )
+    draw.text((copy_x + 34, 430), "Comment → Need → Structure → Rendering", font=load_font(17), fill=str(palette["muted"]))
 
-    rounded_rect(draw, (24, 545, 1576, 850), "#FFFDF7", "#CBBCA2", radius=14)
-    draw_section_title(draw, 40, 568, "01", "设计说明", "Design description")
+    rounded_rect(draw, (24, 545, 1576, 850), str(palette["panel"]), str(palette["line"]), radius=14)
+    draw_section_title(draw, 40, 568, "01", "设计说明", "Design description", palette)
     notes = build_compact_board_notes(product_name, req_df, topic_df)
     y = 635
     for note in notes:
-        draw.text((64, y), f"• {note}", font=font_body, fill="#443927")
+        draw.text((64, y), f"• {note}", font=font_body, fill=str(palette["ink"]))
         y += 38
-    draw_section_title(draw, 780, 568, "02", "功能分析", "Functional analysis")
+    draw_section_title(draw, 780, 568, "02", "功能分析", "Functional analysis", palette)
     functions = notes[1:] or ["需求匹配", "结构稳定", "交互清晰"]
     for index, item in enumerate(functions[:4]):
         x = 800 + (index % 2) * 360
         item_y = 638 + (index // 2) * 76
-        rounded_rect(draw, (x, item_y, x + 318, item_y + 50), "#F2EAD9", None, radius=12)
-        draw.text((x + 18, item_y + 14), compact_text(item, 18), font=load_font(16), fill="#4B3A1E")
+        rounded_rect(draw, (x, item_y, x + 318, item_y + 50), str(palette["panel_alt"]), None, radius=12)
+        draw.text((x + 18, item_y + 14), compact_text(item, 18), font=load_font(16), fill=str(palette["ink"]))
 
-    paste_image_panel(img, draw, images["exploded"], (24, 875, 560, 1390), "03 爆炸分析 / Exploded View")
+    paste_image_panel(img, draw, images["exploded"], (24, 875, 560, 1390), "03 爆炸分析 / Exploded View", palette)
     component_terms = collect_prompt_terms(req_df, ["来源关键词", "需求主题"], limit=5)
     if not component_terms:
         component_terms = ["主体结构", "连接件", "操作区", "承力结构", "材料工艺"]
     for index, term in enumerate(component_terms[:6]):
         line_y = 940 + index * 66
-        draw.line((315, line_y, 370, line_y - 20), fill="#4D4030", width=2)
-        draw.text((382, line_y - 30), compact_text(term, 10), font=load_font(15), fill="#493923")
+        draw.line((315, line_y, 370, line_y - 20), fill=str(palette["accent"]), width=2)
+        draw.text((382, line_y - 30), compact_text(term, 10), font=load_font(15), fill=str(palette["ink"]))
 
-    paste_image_panel(img, draw, images["detail"], (580, 875, 1058, 1390), "04 细节分析 / Detail")
+    paste_image_panel(img, draw, images["detail"], (580, 875, 1058, 1390), "04 细节分析 / Detail", palette)
     detail_notes = ["关键连接清晰", "操作区域可识别", "材料质感统一"]
     for index, note in enumerate(detail_notes):
-        draw.text((615, 1285 + index * 30), f"• {note}", font=load_font(15), fill="#493923")
+        draw.text((615, 1285 + index * 30), f"• {note}", font=load_font(15), fill=str(palette["ink"]))
 
-    rounded_rect(draw, (1110, 875, 1576, 1122), "#FFFDF7", "#CBBCA2", radius=12)
-    draw_section_title(draw, 1130, 900, "05", "结构工艺", "Structure")
+    rounded_rect(draw, (1110, 875, 1576, 1122), str(palette["panel"]), str(palette["line"]), radius=12)
+    draw_section_title(draw, 1130, 900, "05", "结构工艺", "Structure", palette)
     structure_notes = [
         "模块分层清楚",
         "装配路径可理解",
@@ -373,26 +498,26 @@ def create_board(path: Path, images: dict[str, Path], req_df: pd.DataFrame, topi
     ]
     for index, note in enumerate(structure_notes):
         note_y = 970 + index * 45
-        rounded_rect(draw, (1142, note_y, 1538, note_y + 32), "#F2EAD9", None, radius=10)
-        draw.text((1160, note_y + 8), f"• {note}", font=load_font(15), fill="#493923")
+        rounded_rect(draw, (1142, note_y, 1538, note_y + 32), str(palette["panel_alt"]), None, radius=10)
+        draw.text((1160, note_y + 8), f"• {note}", font=load_font(15), fill=str(palette["ink"]))
 
-    rounded_rect(draw, (1110, 1142, 1576, 1390), "#FFFDF7", "#CBBCA2", radius=12)
-    draw_section_title(draw, 1130, 1162, "06", "材质分析", "Material")
+    rounded_rect(draw, (1110, 1142, 1576, 1390), str(palette["panel"]), str(palette["line"]), radius=12)
+    draw_section_title(draw, 1130, 1162, "06", "材质分析", "Material", palette)
     material_text = "结合防滑接触面、耐清洁外壳和稳定承力结构，兼顾日常维护、触感舒适与工程可行性。"
-    draw_wrapped(draw, (1142, 1235), material_text, font_body, "#493923", 390, line_gap=7)
+    draw_wrapped(draw, (1142, 1235), material_text, font_body, str(palette["ink"]), 390, line_gap=7)
 
-    paste_image_panel(img, draw, images["three_view"], (24, 1415, 1160, 1745), "07 三视图 / Three View")
-    rounded_rect(draw, (1182, 1415, 1576, 1745), "#FFFDF7", "#CBBCA2", radius=12)
-    draw.text((1210, 1444), "产品尺寸（mm）", font=load_font(20, bold=True), fill="#493923")
+    paste_image_panel(img, draw, images["three_view"], (24, 1415, 1160, 1745), "07 三视图 / Three View", palette)
+    rounded_rect(draw, (1182, 1415, 1576, 1745), str(palette["panel"]), str(palette["line"]), radius=12)
+    draw.text((1210, 1444), "产品尺寸（mm）", font=load_font(20, bold=True), fill=str(palette["ink"]))
     dimension_rows = [("总宽度", "按产品比例"), ("总深度", "按场景匹配"), ("总高度", "符合人体工学"), ("操作区", "清晰可达")]
     for index, (label, value) in enumerate(dimension_rows):
         row_y = 1496 + index * 54
-        draw.rectangle((1210, row_y, 1545, row_y + 42), outline="#CBBCA2", width=1)
-        draw.text((1230, row_y + 12), label, font=load_font(15), fill="#493923")
-        draw.text((1375, row_y + 12), value, font=load_font(15), fill="#493923")
+        draw.rectangle((1210, row_y, 1545, row_y + 42), outline=str(palette["line"]), width=1)
+        draw.text((1230, row_y + 12), label, font=load_font(15), fill=str(palette["ink"]))
+        draw.text((1375, row_y + 12), value, font=load_font(15), fill=str(palette["ink"]))
 
-    rounded_rect(draw, (24, 1770, 1576, 2165), "#FFFDF7", "#CBBCA2", radius=14)
-    draw_section_title(draw, 44, 1792, "08", "效果图展示", "Rendering")
+    rounded_rect(draw, (24, 1770, 1576, 2165), str(palette["panel"]), str(palette["line"]), radius=14)
+    draw_section_title(draw, 44, 1792, "08", "效果图展示", "Rendering", palette)
     render_slots = [
         (44, 1860, 405, 2115, images["render"], "产品效果"),
         (430, 1860, 790, 2115, images["detail"], "细节效果"),
@@ -400,11 +525,11 @@ def create_board(path: Path, images: dict[str, Path], req_df: pd.DataFrame, topi
         (1200, 1860, 1556, 2115, images["exploded"], "结构表达"),
     ]
     for left, top, right, bottom, image_path, title in render_slots:
-        paste_image_cover(img, draw, image_path, (left, top, right, bottom), title)
-        draw.rectangle((left, bottom - 34, right, bottom), fill="#F6F1E7")
-        draw.text((left + 16, bottom - 26), title, font=load_font(15, bold=True), fill="#493923")
+        paste_image_cover(img, draw, image_path, (left, top, right, bottom), title, palette)
+        draw.rectangle((left, bottom - 34, right, bottom), fill=str(palette["background"]))
+        draw.text((left + 16, bottom - 26), title, font=load_font(15, bold=True), fill=str(palette["ink"]))
 
-    draw.text((w - 32, h - 16), "基于用户评论数据自动生成 · PM 视觉验收版", font=load_font(13), fill="#7B6A54", anchor="rb")
+    draw.text((w - 32, h - 16), "基于用户评论数据自动生成 · PM 视觉验收版", font=load_font(13), fill=str(palette["muted"]), anchor="rb")
     img.save(path)
     print(f"已生成展板：{path}")
 
@@ -752,7 +877,15 @@ def build_retry_variation_prompt(prompt: str, asset_key: str, attempt: int) -> s
         ),
         "usage_2": (
             "Retry variation: keep the same exact product, but show a different user action, a different moment in the "
-            "workflow, and a clearly different camera height and background from usage image 1."
+            "workflow, and a clearly different camera height and background from usage image 1. If hands appear, show "
+            "all five fingers with natural joints and allow contact only on an opaque exterior side wall or solid button; "
+            "no finger may overlap, enter, or pass through the transparent lid, medicine compartments, pills, or product shell."
+        ),
+        "usage_1": (
+            "Retry variation for physical contact safety: place the product fully supported on a tabletop with the "
+            "transparent lid held open only by its hinge. The user's complete hands must remain nearby but do not touch "
+            "the product, lid, compartments, or pills; preserve a clearly visible air gap around every finger. No hand or "
+            "finger may cross, merge with, enter, or pass through the product silhouette or transparent lid."
         ),
         "exploded": (
             "Retry variation: rebuild this as one physically plausible assembly with exactly one medication tray. "
@@ -1229,10 +1362,10 @@ Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品细节�
 Prompt: 严格遵守“统一产品设计锁定”，{product_name}工业设计三视图，同一产品以统一比例展示正视图、侧视图和俯视图，三个正交视图水平排列并严格对齐，准确呈现同一轮廓、同一结构分区、同一操作区域与主要尺寸关系，白色背景，无透视变形，orthographic projection，photorealistic，industrial design visualization，no logo，no watermark
 
 ## 5. 设计展板
-Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品设计研究生课题展板，展板中的效果图、爆炸图、细节图、三视图和使用效果图必须是同一款产品，包含需求分析和功能结构映射，学术展示风格，信息层级清晰，photorealistic，industrial design visualization，no logo，no watermark
+Prompt: 严格遵守“统一产品设计锁定”，{product_name}产品设计研究生课题展板，展板中的效果图、爆炸图、细节图、三视图和使用效果图必须是同一款产品，包含需求分析、功能结构映射和规格信息；从产品效果图提取产品主色与材质气质，生成低饱和协调背景和清晰强调色，根据图片比例、内容密度和视觉重心自适应排版，不套固定模板，产品主视觉最大，文字克制、留白充足、信息层级清晰，photorealistic，industrial design visualization，no logo，no watermark
 
 ## 6. 产品使用效果图
-Prompt: 严格遵守“统一产品设计锁定”，真实目标用户在自然生活场景中使用同一款{product_name}的照片级渲染图，产品本体必须与产品效果图、爆炸图、细节图和三视图保持一致，准确展示人物动作、产品尺度、空间关系和核心功能，温馨自然光线，现代真实环境，photorealistic，industrial design visualization，no logo，no watermark
+Prompt: 严格遵守“统一产品设计锁定”，真实目标用户在自然生活场景中使用同一款{product_name}的照片级渲染图，产品本体必须与产品效果图、爆炸图、细节图和三视图保持一致；产品稳定放在真实承托面上，人物双手完整且关节自然，与透明部件、内部结构和产品轮廓保持明确空间关系，任何手指不得穿过、嵌入或被产品截断，准确展示产品尺度和核心功能，温馨自然光线，现代真实环境，photorealistic，industrial design visualization，no logo，no watermark
 
 ---
 关键词参考：{top_keywords}
@@ -1288,8 +1421,8 @@ def maybe_enhance_image_prompts(
 5. 爆炸图必须严格使用“产品结构”中的真实部件，输出单张完整爆炸图，沿中心垂直装配轴从上到下分层悬浮，类似工程手表拆解图；不得生成多宫格、拼贴图、效果图合集、耳机、耳机盒、充电盒或其他无关产品。
 6. 产品细节图要展示关键连接、操作界面、材料工艺和人体工学细节。
 7. 产品三视图必须包含统一比例且严格对齐的正视图、侧视图和俯视图，不得使用透视视角。
-8. 设计展板要整合效果图、爆炸图、细节图、三视图、使用效果图和需求要点，避免难以辨认的大段文字。
-9. 产品使用效果图要描述真实目标用户、动作、空间关系和使用环境。
+8. 设计展板要整合效果图、爆炸图、细节图、三视图、使用效果图和需求要点；从产品主图提取协调色系，并按图片比例和内容密度自适应排版，不得套用固定模板，避免难以辨认的大段文字。
+9. 产品使用效果图要描述真实目标用户、动作、空间关系和使用环境；手部必须五指与关节完整，不能穿过透明部件、内部结构或产品轮廓。
 10. 每条提示词都必须强调 photorealistic、industrial design visualization、no logo、no watermark。
 11. 严格按下列 Markdown 格式输出，只能包含六个章节，每个章节恰好一行以 Prompt: 开头的完整提示词：
 

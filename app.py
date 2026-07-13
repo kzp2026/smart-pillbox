@@ -19,8 +19,10 @@ from scripts.common import build_cleaned_dataframe
 from scripts.product_knowledge_base import (
     DEFAULT_DB_PATH,
     ProductKnowledgeBase,
+    adaptive_board_style_constraints,
     generate_design_package,
     normalize_database_url,
+    usage_scene_geometry_constraints,
 )
 from scripts.upload_parsing import candidate_comment_columns, default_comment_column, extract_comments, read_upload_table
 from scripts.visual_asset_quality import evaluate_visual_asset
@@ -31,7 +33,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-13-exploded-components-v13"
+APP_VERSION = "2026-07-13-adaptive-board-v14"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     "wan2.7-image-pro",
@@ -259,8 +261,9 @@ def build_reference_locked_prompt(prompt: str, asset: dict, has_reference: bool)
         if key == "usage_2"
         else ""
     )
+    human_geometry_rule = usage_scene_geometry_constraints(key)
     return (
-        f"视觉一致性硬约束：{reference_rule} 图像类型：{asset_label}。{layout_rule} {distinct_rule} "
+        f"视觉一致性硬约束：{reference_rule} 图像类型：{asset_label}。{layout_rule} {distinct_rule} {human_geometry_rule} "
         "若无法保持同一产品，请不要替换设计。no collage, no contact sheet, no multi-panel, no product variations.\n\n"
         f"{prompt}"
     )
@@ -317,8 +320,14 @@ def ensure_runtime_visual_asset_constraints(target_product: str, assets: list[di
     for asset in assets:
         current = dict(asset)
         prompt = str(current.get("prompt") or "").strip()
-        if current.get("key") == "exploded" and "爆炸图组件真实性约束" not in prompt:
+        asset_key = str(current.get("key") or "")
+        if asset_key == "exploded" and "爆炸图组件真实性约束" not in prompt:
             current["prompt"] = f"{prompt}\n\n{exploded_constraints}".strip()
+        usage_constraints = usage_scene_geometry_constraints(asset_key)
+        if usage_constraints and "人物与产品几何关系硬约束" not in prompt:
+            current["prompt"] = f"{current.get('prompt', prompt)}\n\n{usage_constraints}".strip()
+        if asset_key == "board" and "展板视觉自适应约束" not in prompt:
+            current["prompt"] = f"{current.get('prompt', prompt)}\n\n{adaptive_board_style_constraints()}".strip()
         upgraded.append(current)
     return upgraded
 
@@ -333,9 +342,9 @@ def build_visual_assets_from_package(package: dict) -> list[dict]:
         ("exploded", "产品爆炸图", "1024x1792", f"单张立体写实爆炸图：等距轴测视角，所有同款产品零部件沿中心垂直装配轴从上到下真实分离并分层悬浮；部件必须有厚度、圆角、透视、真实阴影和 PBR 材质高光。展示外壳、唯一功能托盘、真实内部模块、连接件、紧固件和装配关系；不是平面示意图、不是多宫格、不是拼贴图、不是另一款产品。{runtime_exploded_view_component_constraints(product_name)}"),
         ("detail", "产品细节图", "1024x1024", "产品细节特写图，只放大同一款产品上的关键结构、材质、开启方式、按键、屏幕、提示灯或连接细节，微距摄影质感。"),
         ("three_view", "产品三视图", "1792x1024", "工业设计三视图，同一产品以统一比例展示正视图、侧视图和俯视图，严格对齐，白色背景，无透视变形，适合工程表达。"),
-        ("board", "设计展板", "1600x2200", "设计展板，整合产品效果图、爆炸图、细节图、三视图、使用效果图、需求分析和功能结构映射；信息层级清晰，少文字，多图像，适合论文和开题展示。"),
-        ("usage_1", "产品使用效果图 1", "1024x1024", "单张真实使用场景图，目标用户在自然生活环境中使用同一款产品，人物动作、产品尺度、空间关系和核心功能表达真实合理；不是拼图，不是九宫格。"),
-        ("usage_2", "产品使用效果图 2", "1024x1024", "单张真实使用场景图，从另一自然视角展示同一款产品被目标用户操作或提醒，产品轮廓、材料、分格数量和核心交互区必须与母版完全一致；不是拼图，不是九宫格。"),
+        ("board", "设计展板", "1600x2200", "设计展板，整合产品主视觉、爆炸图、细节图、三视图、使用场景、需求分析、功能结构映射和规格信息；从产品效果图提取主色与材质气质，生成低饱和协调背景和清晰强调色；版式根据图片比例、内容密度和视觉重心自适应，不套固定模板，保持美观、留白和清晰层级。"),
+        ("usage_1", "产品使用效果图 1", "1024x1024", "单张真实使用场景图，产品稳定平放在桌面，透明上盖由铰链自行支撑；目标用户在旁边查看提醒或手机，双手完整可见并与盒体、透明上盖、药格和药片保持明显可见间距，不握持、不扶盖、不伸入药格；手指不得穿过产品轮廓和透明材质；不是拼图，不是九宫格。"),
+        ("usage_2", "产品使用效果图 2", "1024x1024", "单张真实使用场景图，从另一自然视角展示同一款产品被目标用户操作或提醒；如有人手，只允许自然接触不透明外壳侧边或实体按键，五指与关节完整，不得穿过透明上盖、药格或产品内部；产品本体必须与母版完全一致；不是拼图，不是九宫格。"),
     ]
     assets = [
         {
