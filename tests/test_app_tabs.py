@@ -121,6 +121,13 @@ class AppTabsTests(unittest.TestCase):
         self.assertNotIn('disabled=not target_product.strip()', app_source)
         self.assertIn("请先填写要生成的产品", app_source)
 
+    def test_generation_and_result_views_keep_their_responsibilities_separate(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+        self.assertIn("生成完成，请切换到“结果预览”查看设计方案、完整 prompt 与效果图。", app_source)
+        self.assertNotIn('render_prompt_gallery(package, active_image_config, render_provider, "generate_tab_render_all")', app_source)
+        self.assertIn("完整 8 条 prompt", app_source)
+        self.assertIn("当前渲染服务尚未载入 API Key", app_source)
+
     def test_legacy_result_page_keeps_legacy_stage_tabs_visible(self) -> None:
         page_source = (ROOT_DIR / "pages" / "03_旧版结果预览.py").read_text(encoding="utf-8")
         for label in [

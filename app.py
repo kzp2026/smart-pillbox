@@ -30,7 +30,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-12-scheme-button-v5"
+APP_VERSION = "2026-07-12-result-preview-v6"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
@@ -587,7 +587,7 @@ def render_copy_all_prompts_button(prompt_text: str, key: str) -> None:
     )
 
 
-def render_prompt_gallery(package: dict, image_config: dict, render_provider: str, button_key: str) -> None:
+def _render_prompt_gallery_legacy(package: dict, image_config: dict, render_provider: str, button_key: str) -> None:
     assets = get_visual_assets(package)
     prompts = [str(asset.get("prompt", "")).strip() for asset in assets if str(asset.get("prompt", "")).strip()]
     st.subheader("prompt")
@@ -617,6 +617,51 @@ def render_prompt_gallery(package: dict, image_config: dict, render_provider: st
             st.error(f"视觉验收未通过：{failure_text}。不展示低质量回退图，请调整 Key、模型权限、余额或网络后重新生成。")
     elif not image_config.get("api_key"):
         st.caption(f"填写{render_provider} API Key 后可在这里直接生成 8 张独立设计图。")
+
+
+def render_prompt_gallery(package: dict, image_config: dict, render_provider: str, button_key: str) -> None:
+    assets = get_visual_assets(package)
+    prompts = [str(asset.get("prompt", "")).strip() for asset in assets if str(asset.get("prompt", "")).strip()]
+    prompt_text = build_all_prompts_text(assets)
+
+    st.subheader("生成效果图")
+    render_requested = st.button(
+        f"用{render_provider}生成 {len(prompts) or 8} 张效果图",
+        type="primary",
+        use_container_width=True,
+        key=f"{button_key}_generate_images",
+    )
+    if render_requested:
+        if not prompts:
+            st.error("当前方案没有可用于渲染的 prompt。")
+        elif not image_config.get("api_key"):
+            st.warning(f"当前渲染服务尚未载入 API Key。请在左侧填写{render_provider} API Key 后重试。")
+        else:
+            progress = st.progress(0)
+            status = st.empty()
+            generated_paths, validation_failures = generate_visual_asset_set(package, image_config, progress, status)
+            if generated_paths:
+                store_latest_image_paths(generated_paths)
+                st.success(f"视觉一致性基础验收通过，已生成 {len(generated_paths)} 张独立设计图。")
+            else:
+                store_latest_image_paths([])
+                failure_text = "；".join(validation_failures) if validation_failures else "图像服务未返回可验收图片"
+                st.error(f"视觉验收未通过：{failure_text}。不展示低质量回退图，请调整 Key、模型权限、余额或网络后重新生成。")
+
+    st.subheader("效果图预览")
+    render_image_download_grid(get_latest_image_paths(), f"{button_key}_preview", assets)
+
+    st.subheader("完整 8 条 prompt")
+    if not assets:
+        st.info("当前方案还没有 prompt。")
+        return
+    render_copy_all_prompts_button(prompt_text, f"{button_key}_all_prompts")
+    prompt_labels = [f"prompt {index} · {asset.get('label', '效果图')}" for index, asset in enumerate(assets, start=1)]
+    selected_label = st.selectbox("选择要查看的 prompt", prompt_labels, key=f"{button_key}_prompt_selector")
+    selected_index = prompt_labels.index(selected_label)
+    st.code(str(assets[selected_index].get("prompt") or ""), language="text")
+    with st.expander("查看全部 8 条 prompt", expanded=False):
+        st.code(prompt_text, language="text")
 
 
 def render_quality_report(package: dict) -> None:
@@ -1155,26 +1200,24 @@ def render_main_result_preview(
         st.caption("生成后这里会固定展示设计方案、prompt 和 8 张独立设计图预览。")
         return
 
-    left, right = st.columns([0.6, 0.4])
-    with left:
-        st.subheader("设计方案预览")
-        st.markdown(package.get("design_text", ""))
-        industrial_design_prompt = str(package.get("industrial_design_prompt") or "").strip()
-        if industrial_design_prompt:
-            with st.expander("工业设计 Prompt 约束", expanded=False):
-                st.code(industrial_design_prompt, language="text")
-        with st.expander("查看引用证据和合理性检查", expanded=False):
-            render_quality_report(package)
-            if context:
-                evidence_rows = []
-                for item in context.get("requirements", [])[:5]:
-                    evidence_rows.append({"类型": "需求", "来源产品": item.get("product_name", ""), "内容": item.get("title", ""), "证据": item.get("evidence_text", "")})
-                for item in context.get("comments", [])[:5]:
-                    evidence_rows.append({"类型": "评论", "来源产品": item.get("product_name", ""), "内容": item.get("comment_original", ""), "证据": ""})
-                st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
+    st.subheader("设计方案预览")
+    st.markdown(package.get("design_text", ""))
+    industrial_design_prompt = str(package.get("industrial_design_prompt") or "").strip()
+    if industrial_design_prompt:
+        with st.expander("工业设计 Prompt 约束", expanded=False):
+            st.code(industrial_design_prompt, language="text")
+    with st.expander("查看引用证据和合理性检查", expanded=False):
+        render_quality_report(package)
+        if context:
+            evidence_rows = []
+            for item in context.get("requirements", [])[:5]:
+                evidence_rows.append({"类型": "需求", "来源产品": item.get("product_name", ""), "内容": item.get("title", ""), "证据": item.get("evidence_text", "")})
+            for item in context.get("comments", [])[:5]:
+                evidence_rows.append({"类型": "评论", "来源产品": item.get("product_name", ""), "内容": item.get("comment_original", ""), "证据": ""})
+            st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
 
-    with right:
-        render_prompt_gallery(package, image_config, render_provider, button_key)
+    st.divider()
+    render_prompt_gallery(package, image_config, render_provider, button_key)
 
 
 st.set_page_config(page_title="产品评论知识库智能体", page_icon="🧠", layout="wide")
@@ -1382,29 +1425,7 @@ with tab_generate:
         st.session_state["latest_run_id"] = run_id
         st.session_state["latest_image_paths"] = []
         st.session_state.pop("latest_image_path", None)
-
-    package = st.session_state.get("latest_generation")
-    context = st.session_state.get("latest_context")
-    if package:
-        left, right = st.columns([0.62, 0.38])
-        with left:
-            st.subheader("设计方案")
-            st.markdown(package["design_text"])
-            with st.expander("工业设计 Prompt 约束", expanded=False):
-                st.code(str(package.get("industrial_design_prompt") or ""), language="text")
-        with right:
-            st.subheader("验证结果")
-            render_quality_report(package)
-            if context:
-                st.subheader("引用证据")
-                evidence_rows = []
-                for item in context.get("requirements", [])[:5]:
-                    evidence_rows.append({"类型": "需求", "来源产品": item.get("product_name", ""), "内容": item.get("title", ""), "证据": item.get("evidence_text", "")})
-                for item in context.get("comments", [])[:5]:
-                    evidence_rows.append({"类型": "评论", "来源产品": item.get("product_name", ""), "内容": item.get("comment_original", ""), "证据": ""})
-                st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
-
-            render_prompt_gallery(package, active_image_config, render_provider, "generate_tab_render_all")
+        st.success("生成完成，请切换到“结果预览”查看设计方案、完整 prompt 与效果图。")
 
 with tab_result:
     render_main_result_preview(
