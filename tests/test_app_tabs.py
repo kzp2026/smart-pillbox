@@ -12,6 +12,16 @@ class AppTabsTests(unittest.TestCase):
         requirements = (ROOT_DIR / "requirements.txt").read_text(encoding="utf-8")
         self.assertIn("streamlit==1.58.0", requirements)
 
+    def test_main_app_handles_cloud_database_startup_failures_without_generic_crash(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+        for snippet in [
+            "describe_database_startup_error",
+            "except Exception as database_error",
+            "系统不会在云数据库异常时自动切换到临时本地数据库",
+            "st.stop()",
+        ]:
+            self.assertIn(snippet, app_source)
+
     def test_main_app_keeps_primary_flow_tabs_visible(self) -> None:
         app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
         for label in [

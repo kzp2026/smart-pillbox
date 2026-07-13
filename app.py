@@ -31,7 +31,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-13-cloud-copy-control-v7"
+APP_VERSION = "2026-07-13-cloud-database-diagnostics-v8"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
@@ -88,6 +88,24 @@ def get_kb(database_url: str, owner_id: str) -> ProductKnowledgeBase:
     kb = ProductKnowledgeBase(database_url=database_url, owner_id=owner_id)
     kb.initialize()
     return kb
+
+
+def describe_database_startup_error(database_url: str, error: Exception) -> str:
+    """Return an actionable, non-sensitive database startup diagnosis for the UI."""
+    if database_url.startswith("sqlite"):
+        return "本地知识库无法初始化，请检查磁盘写入权限或数据库文件。"
+
+    error_name = type(error).__name__
+    message = str(error).lower()
+    if "password authentication failed" in message or "authentication failed" in message:
+        return "云数据库认证失败，请在 Streamlit Secrets 中检查连接串中的用户名和密码。"
+    if "could not translate host name" in message or "name or service not known" in message:
+        return "云数据库地址无法解析，请检查连接串中的主机地址。"
+    if "connection refused" in message or "timeout" in message or "timed out" in message:
+        return "云数据库无法建立连接，请检查 Supabase 项目状态、连接端口和网络访问。"
+    if "psycopg" in message or error_name == "ImportError":
+        return "云数据库驱动未就绪，部署会自动安装 psycopg[binary] 后重试。"
+    return f"云数据库初始化失败（{error_name}）。请在 Streamlit Cloud 的应用日志中检查数据库连接配置。"
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -1279,7 +1297,14 @@ with st.sidebar:
         st.caption(f"请填写{render_provider} API Key；未填写时只生成可复制的写实渲染提示词。")
 
 
-kb = get_kb(database_url, owner_id)
+try:
+    kb = get_kb(database_url, owner_id)
+except Exception as database_error:
+    st.error(describe_database_startup_error(database_url, database_error))
+    if not database_url.startswith("sqlite"):
+        st.info("为保护已沉淀的评论和方案数据，系统不会在云数据库异常时自动切换到临时本地数据库。")
+    st.stop()
+
 products = kb.list_products()
 
 render_cloud_studio_overview(products, database_url, bool(active_image_config.get("api_key")), active_render_label)
