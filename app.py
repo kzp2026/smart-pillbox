@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import math
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from scripts.common import build_cleaned_dataframe
 from scripts.product_knowledge_base import (
@@ -565,8 +567,7 @@ def build_all_prompts_text(assets: list[dict]) -> str:
 def render_copy_all_prompts_button(prompt_text: str, key: str) -> None:
     payload = json.dumps(prompt_text, ensure_ascii=False).replace("</", "<\\/")
     button_id = f"copy-all-prompts-{key}".replace("_", "-")
-    st.html(
-        f"""
+    html = f"""
         <button id="{button_id}" style="width:100%;height:38px;border:1px solid #c9daf8;border-radius:8px;background:#fff;color:#17345f;font-weight:650;cursor:pointer;">复制全部 prompt</button>
         <script>
           const button = document.getElementById({json.dumps(button_id)});
@@ -581,9 +582,11 @@ def render_copy_all_prompts_button(prompt_text: str, key: str) -> None:
             }}
           }});
         </script>
-        """,
-        unsafe_allow_javascript=True,
-    )
+        """
+    if hasattr(st, "html") and "unsafe_allow_javascript" in inspect.signature(st.html).parameters:
+        st.html(html, unsafe_allow_javascript=True)
+    else:
+        components.html(html, height=46)
 
 
 def _render_prompt_gallery_legacy(package: dict, image_config: dict, render_provider: str, button_key: str) -> None:
