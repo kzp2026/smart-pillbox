@@ -8,6 +8,10 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
 class AppTabsTests(unittest.TestCase):
+    def test_requirements_pin_verified_streamlit_runtime(self) -> None:
+        requirements = (ROOT_DIR / "requirements.txt").read_text(encoding="utf-8")
+        self.assertIn("streamlit==1.58.0", requirements)
+
     def test_main_app_keeps_primary_flow_tabs_visible(self) -> None:
         app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
         for label in [
