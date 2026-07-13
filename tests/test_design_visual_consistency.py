@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
+import io
 import importlib.util
 import os
 import json
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -255,9 +258,11 @@ class DesignVisualConsistencyTests(unittest.TestCase):
     def test_dashscope_multimodal_reference_request_uses_reference_image(self) -> None:
         module = load_design_visuals_module()
         requests = []
+        timeouts = []
 
         def fake_urlopen(request, timeout=0):
             requests.append(request)
+            timeouts.append(timeout)
             body = json.loads(request.data.decode("utf-8"))
             content = body["input"]["messages"][0]["content"]
             self.assertEqual(body["model"], "qwen-image-2.0-pro")
@@ -289,6 +294,73 @@ class DesignVisualConsistencyTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(output_bytes, b"PNG")
         self.assertEqual(len(requests), 1)
+        self.assertGreaterEqual(timeouts[0], 180)
+
+    def test_reference_image_is_downscaled_and_compressed_before_upload(self) -> None:
+        module = load_design_visuals_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reference_path = Path(temp_dir) / "large-reference.png"
+            Image.effect_noise((1800, 1200), 64).convert("RGB").save(reference_path)
+
+            data_url = module.image_to_data_url(reference_path)
+            encoded = data_url.split(",", 1)[1]
+            with Image.open(io.BytesIO(base64.b64decode(encoded))) as uploaded_image:
+                uploaded_size = uploaded_image.size
+                uploaded_format = uploaded_image.format
+
+        self.assertTrue(data_url.startswith("data:image/jpeg;base64,"))
+        self.assertLessEqual(max(uploaded_size), 1024)
+        self.assertEqual(uploaded_format, "JPEG")
+
+    def test_reference_upload_timeout_is_retried(self) -> None:
+        module = load_design_visuals_module()
+        attempts = []
+
+        def fake_urlopen(request, timeout=0):
+            attempts.append(timeout)
+            if len(attempts) == 1:
+                raise urllib.error.URLError(TimeoutError("The write operation timed out"))
+            return FakeResponse(
+                {"output": {"choices": [{"message": {"content": [{"image": "https://example.com/ref.png"}]}}]}}
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reference_path = root / "reference.png"
+            output_path = root / "output.png"
+            Image.new("RGB", (1600, 1200), "white").save(reference_path)
+            config = {
+                "provider": "dashscope",
+                "api_key": "test-key",
+                "model": "qwen-image-2.0-pro",
+                "multimodal_url": "https://example.com/multimodal-generation/generation",
+                "prompt_extend": False,
+                "negative_prompt": "collage",
+            }
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                with patch("urllib.request.urlretrieve", side_effect=lambda url, filename: Path(filename).write_bytes(b"PNG")):
+                    with patch("time.sleep"):
+                        ok = module.generate_dashscope_multimodal_image(
+                            "same product detail", output_path, "1024x1024", config, reference_path=reference_path
+                        )
+
+        self.assertTrue(ok)
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(all(timeout >= 180 for timeout in attempts))
+
+    def test_second_visual_attempt_forces_a_distinct_composition(self) -> None:
+        module = load_design_visuals_module()
+
+        first_attempt = module.build_retry_variation_prompt("base prompt", "render_2", 1)
+        second_render_attempt = module.build_retry_variation_prompt("base prompt", "render_2", 2)
+        second_usage_attempt = module.build_retry_variation_prompt("base prompt", "usage_2", 2)
+
+        self.assertEqual(first_attempt, "base prompt")
+        self.assertIn("camera azimuth", second_render_attempt)
+        self.assertIn("rear three-quarter", second_render_attempt)
+        self.assertIn("different user action", second_usage_attempt)
+        self.assertNotEqual(second_render_attempt, first_attempt)
 
     def test_reference_failure_retries_text_generation_before_fallback(self) -> None:
         module = load_design_visuals_module()

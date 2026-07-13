@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
-import mimetypes
 import os
 import re
 import subprocess
@@ -685,9 +685,65 @@ def dashscope_parameters(size: str, config: dict, n: int = 1) -> dict:
 
 
 def image_to_data_url(image_path: Path) -> str:
-    mime_type = mimetypes.guess_type(str(image_path))[0] or "image/png"
-    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
+    max_edge = max(512, int(os.getenv("DASHSCOPE_REFERENCE_MAX_EDGE", "1024")))
+    quality = min(95, max(60, int(os.getenv("DASHSCOPE_REFERENCE_JPEG_QUALITY", "82"))))
+    with Image.open(image_path) as source:
+        image = ImageOps.exif_transpose(source)
+        image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+        if image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info):
+            rgba = image.convert("RGBA")
+            background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            background.alpha_composite(rgba)
+            image = background.convert("RGB")
+        else:
+            image = image.convert("RGB")
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=quality, optimize=True)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
+def build_retry_variation_prompt(prompt: str, asset_key: str, attempt: int) -> str:
+    if attempt <= 1:
+        return prompt
+    variations = {
+        "render_2": (
+            "Retry variation: keep the same exact product, but move the camera azimuth at least 120 degrees from the "
+            "first product render; use an elevated rear three-quarter view, asymmetric diagonal composition, and clearly "
+            "different studio lighting. Do not reuse the previous camera position or framing."
+        ),
+        "usage_2": (
+            "Retry variation: keep the same exact product, but show a different user action, a different moment in the "
+            "workflow, and a clearly different camera height and background from usage image 1."
+        ),
+    }
+    variation = variations.get(
+        asset_key,
+        "Retry variation: preserve the exact product identity while making the requested view clearer and materially different.",
+    )
+    return f"{prompt}\n\n{variation}"
+
+
+def dashscope_reference_request(payload: dict, config: dict) -> dict:
+    timeout = max(60, int(config.get("reference_timeout") or os.getenv("DASHSCOPE_REFERENCE_TIMEOUT_SECONDS", "240")))
+    attempts = min(3, max(1, int(config.get("reference_attempts") or os.getenv("DASHSCOPE_REFERENCE_ATTEMPTS", "2"))))
+    last_error: urllib.error.URLError | TimeoutError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return dashscope_request_json(
+                config["multimodal_url"],
+                config["api_key"],
+                payload,
+                async_request=False,
+                timeout=timeout,
+            )
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last_error = exc
+            if attempt >= attempts:
+                raise
+            time.sleep(min(2 ** (attempt - 1), 4))
+    assert last_error is not None
+    raise last_error
 
 
 def extract_dashscope_image_url(payload: dict) -> str:
@@ -801,15 +857,13 @@ def generate_dashscope_multimodal_image(
     content.append({"text": prompt})
 
     try:
-        response = dashscope_request_json(
-            config["multimodal_url"],
-            api_key,
+        response = dashscope_reference_request(
             {
                 "model": config["model"],
                 "input": {"messages": [{"role": "user", "content": content}]},
                 "parameters": dashscope_parameters(size, config, n=1),
             },
-            async_request=False,
+            config,
         )
         task_id = response.get("output", {}).get("task_id")
         if task_id:

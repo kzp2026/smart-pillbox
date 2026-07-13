@@ -31,7 +31,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-13-provider-error-details-v9"
+APP_VERSION = "2026-07-13-reference-upload-reliability-v10"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     DEFAULT_IMAGE_MODEL,
@@ -466,6 +466,7 @@ def generate_visual_asset_set(
                 asset,
                 has_reference=reference_image is not None,
             )
+            prompt = module.build_retry_variation_prompt(prompt, key, attempt)
             generated_image_path = generate_image_render(
                 prompt,
                 product_name,
