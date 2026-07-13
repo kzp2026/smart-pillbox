@@ -202,6 +202,19 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
         self.assertIn("设计展板", visual_assets[5]["prompt"])
         self.assertIn("真实使用场景", visual_assets[6]["prompt"])
 
+    def test_smart_pillbox_exploded_prompt_requires_real_internal_components(self) -> None:
+        package = generate_design_package(
+            target_product="智能药盒",
+            demand_text="提醒老人按时吃药，操作简便，能与手机连接交互。",
+            context={"products": [], "requirements": [], "comments": [], "evidence_count": 0},
+        )
+
+        exploded_prompt = package["visual_assets"][2]["prompt"]
+        self.assertIn("药格托盘只允许出现 1 层", exploded_prompt)
+        self.assertIn("主控 PCB", exploded_prompt)
+        self.assertIn("锂电池", exploded_prompt)
+        self.assertIn("不得用重复药格托盘代替内部零件", exploded_prompt)
+
     def test_generation_marks_low_evidence_as_needing_review(self) -> None:
         package = generate_design_package(
             target_product="露营咖啡机",

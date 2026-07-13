@@ -92,6 +92,39 @@ class VisualAssetQualityTests(unittest.TestCase):
         self.assertFalse(usage_result["accepted"])
         self.assertIn("过于相似", render_result["reason"])
 
+    def test_rejects_exploded_view_made_from_repeated_trays(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "repeated-trays.png"
+            image = Image.new("RGB", (720, 1200), "#f4f4f2")
+            draw = ImageDraw.Draw(image)
+            for top in (140, 370, 600, 830):
+                draw.rounded_rectangle((150, top, 570, top + 145), radius=30, fill="#7f9b78", outline="#35533b", width=8)
+                for offset in (105, 210, 315):
+                    draw.line((150 + offset, top + 8, 150 + offset, top + 137), fill="#35533b", width=7)
+            image.save(image_path)
+
+            result = evaluate_visual_asset(image_path, "exploded")
+
+        self.assertFalse(result["accepted"])
+        self.assertIn("重复托盘", result["reason"])
+
+    def test_accepts_exploded_view_with_distinct_internal_components(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "real-components.png"
+            image = Image.new("RGB", (720, 1200), "#f4f4f2")
+            draw = ImageDraw.Draw(image)
+            draw.rounded_rectangle((150, 100, 570, 215), radius=28, outline="#6f8c78", width=10)
+            draw.rounded_rectangle((170, 280, 550, 405), radius=24, fill="#91a88e", outline="#3e6247", width=7)
+            draw.rounded_rectangle((205, 470, 515, 555), radius=10, fill="#356b45")
+            draw.rectangle((245, 595, 475, 690), fill="#b9bdc5", outline="#555b66", width=6)
+            draw.ellipse((290, 735, 430, 875), fill="#34373b")
+            draw.rounded_rectangle((145, 930, 575, 1060), radius=30, fill="#e1e3e6", outline="#737982", width=8)
+            image.save(image_path)
+
+            result = evaluate_visual_asset(image_path, "exploded")
+
+        self.assertTrue(result["accepted"])
+
 
 if __name__ == "__main__":
     unittest.main()

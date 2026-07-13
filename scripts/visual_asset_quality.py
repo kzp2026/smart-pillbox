@@ -46,6 +46,108 @@ def _looks_like_contact_sheet(image: Image.Image) -> bool:
     return len(vertical) >= 2 and len(horizontal) >= 2
 
 
+def _exploded_layer_signatures(image: Image.Image) -> list[Image.Image]:
+    width = 160
+    height = max(220, round(width * image.height / max(image.width, 1)))
+    resized = image.convert("RGB").resize((width, height), Image.Resampling.BILINEAR)
+    corner = max(8, width // 16)
+    border_samples = [
+        resized.crop((0, 0, corner, corner)),
+        resized.crop((width - corner, 0, width, corner)),
+        resized.crop((0, height - corner, corner, height)),
+        resized.crop((width - corner, height - corner, width, height)),
+    ]
+    medians = [ImageStat.Stat(sample).median for sample in border_samples]
+    background = tuple(round(sum(sample[channel] for sample in medians) / len(medians)) for channel in range(3))
+    difference = ImageChops.difference(resized, Image.new("RGB", resized.size, background)).convert("L")
+    mask = difference.point(lambda value: 255 if value >= 16 else 0)
+
+    active_rows = []
+    for y in range(height):
+        foreground = sum(1 for x in range(width) if mask.getpixel((x, y)) > 0)
+        if foreground / width >= 0.12:
+            active_rows.append(y)
+
+    groups: list[list[int]] = []
+    for y in active_rows:
+        if groups and y <= groups[-1][-1] + 2:
+            groups[-1].append(y)
+        else:
+            groups.append([y])
+
+    signatures: list[Image.Image] = []
+    for group in groups:
+        top, bottom = group[0], group[-1] + 1
+        if bottom - top < max(10, round(height * 0.035)):
+            continue
+        layer_mask = mask.crop((0, top, width, bottom))
+        bbox = layer_mask.getbbox()
+        if not bbox or bbox[2] - bbox[0] < width * 0.28:
+            continue
+        crop = resized.crop((bbox[0], top + bbox[1], bbox[2], top + bbox[3]))
+        signatures.append(crop.resize((72, 36), Image.Resampling.BILINEAR))
+    return signatures
+
+
+def _looks_like_repeated_exploded_layers(image: Image.Image) -> bool:
+    width = 160
+    height = max(220, round(width * image.height / max(image.width, 1)))
+    resized = image.convert("RGB").resize((width, height), Image.Resampling.BILINEAR)
+    colored_density: list[float] = []
+    for y in range(height):
+        colored_pixels = 0
+        for x in range(width):
+            pixel = resized.getpixel((x, y))
+            if max(pixel) - min(pixel) >= 12 and max(pixel) <= 242:
+                colored_pixels += 1
+        colored_density.append(colored_pixels / width)
+    smoothed = [
+        sum(colored_density[max(0, y - 3) : min(height, y + 4)])
+        / len(colored_density[max(0, y - 3) : min(height, y + 4)])
+        for y in range(height)
+    ]
+    minimum_peak_distance = max(14, round(height * 0.055))
+    colored_peaks: list[int] = []
+    for y in sorted(range(height), key=lambda row: smoothed[row], reverse=True):
+        if smoothed[y] < 0.35:
+            break
+        if all(abs(y - peak) >= minimum_peak_distance for peak in colored_peaks):
+            colored_peaks.append(y)
+    if len(colored_peaks) >= 4:
+        band_radius = max(9, round(height * 0.04))
+        colored_bands = [
+            resized.crop((0, max(0, peak - band_radius), width, min(height, peak + band_radius + 1))).resize(
+                (72, 24), Image.Resampling.BILINEAR
+            )
+            for peak in colored_peaks
+        ]
+        similar_pairs = 0
+        linked_peaks: set[int] = set()
+        for left in range(len(colored_bands)):
+            for right in range(left + 1, len(colored_bands)):
+                difference = ImageStat.Stat(ImageChops.difference(colored_bands[left], colored_bands[right])).mean
+                normalized = sum(difference) / (len(difference) * 255)
+                if normalized <= 0.085:
+                    similar_pairs += 1
+                    linked_peaks.update((left, right))
+        if similar_pairs >= 3 and len(linked_peaks) >= 3:
+            return True
+
+    signatures = _exploded_layer_signatures(image)
+    if len(signatures) < 3:
+        return False
+    similar_pairs = 0
+    linked_layers: set[int] = set()
+    for left in range(len(signatures)):
+        for right in range(left + 1, len(signatures)):
+            difference = ImageStat.Stat(ImageChops.difference(signatures[left], signatures[right])).mean
+            normalized = sum(difference) / (len(difference) * 255)
+            if normalized <= 0.13:
+                similar_pairs += 1
+                linked_layers.update((left, right))
+    return similar_pairs >= 2 and len(linked_layers) >= 3
+
+
 def _visual_difference(image: Image.Image, reference_image: Path) -> float | None:
     try:
         with Image.open(reference_image) as opened:
@@ -80,7 +182,10 @@ def evaluate_visual_asset(
     if is_single_product_asset(asset_key) and variance < 12:
         return {"accepted": False, "reason": "图片内容过于空白"}
 
-    if is_single_product_asset(asset_key) and _looks_like_contact_sheet(image):
+    if asset_key == "exploded" and _looks_like_repeated_exploded_layers(image):
+        return {"accepted": False, "reason": "检测到重复托盘或重复外壳层，爆炸图必须展示真实且不同的内部零件"}
+
+    if asset_key != "exploded" and is_single_product_asset(asset_key) and _looks_like_contact_sheet(image):
         return {"accepted": False, "reason": "检测到疑似多宫格或拼贴图"}
 
     if asset_key in {"render_2", "usage_2"} and reference_image and reference_image.exists():

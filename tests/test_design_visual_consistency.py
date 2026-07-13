@@ -355,11 +355,14 @@ class DesignVisualConsistencyTests(unittest.TestCase):
         first_attempt = module.build_retry_variation_prompt("base prompt", "render_2", 1)
         second_render_attempt = module.build_retry_variation_prompt("base prompt", "render_2", 2)
         second_usage_attempt = module.build_retry_variation_prompt("base prompt", "usage_2", 2)
+        second_exploded_attempt = module.build_retry_variation_prompt("base prompt", "exploded", 2)
 
         self.assertEqual(first_attempt, "base prompt")
         self.assertIn("camera azimuth", second_render_attempt)
         self.assertIn("rear three-quarter", second_render_attempt)
         self.assertIn("different user action", second_usage_attempt)
+        self.assertIn("exactly one medication tray", second_exploded_attempt)
+        self.assertIn("PCB", second_exploded_attempt)
         self.assertNotEqual(second_render_attempt, first_attempt)
 
     def test_reference_failure_retries_text_generation_before_fallback(self) -> None:

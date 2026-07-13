@@ -754,6 +754,12 @@ def build_retry_variation_prompt(prompt: str, asset_key: str, attempt: int) -> s
             "Retry variation: keep the same exact product, but show a different user action, a different moment in the "
             "workflow, and a clearly different camera height and background from usage image 1."
         ),
+        "exploded": (
+            "Retry variation: rebuild this as one physically plausible assembly with exactly one medication tray. "
+            "Replace every duplicated tray or shell layer with visibly different internal components: main PCB with MCU "
+            "and wireless chip, lithium battery, speaker or buzzer, vibration motor, USB-C charging board, flex cables, "
+            "fasteners, upper housing, lower housing, and anti-slip base. Do not stack storage trays or complete boxes."
+        ),
     }
     variation = variations.get(
         asset_key,

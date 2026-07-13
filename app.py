@@ -19,6 +19,8 @@ from scripts.common import build_cleaned_dataframe
 from scripts.product_knowledge_base import (
     DEFAULT_DB_PATH,
     ProductKnowledgeBase,
+    ensure_visual_asset_constraints,
+    exploded_view_component_constraints,
     generate_design_package,
     normalize_database_url,
 )
@@ -31,7 +33,7 @@ OUTPUT_DIR = ROOT_DIR / "output" / "knowledge_runs"
 LEGACY_OUTPUT_DIR = ROOT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_IMAGE_MODEL = "qwen-image-2.0-pro-2026-06-22"
-APP_VERSION = "2026-07-13-wan27-rate-limit-v11"
+APP_VERSION = "2026-07-13-exploded-components-v12"
 MAX_VISUAL_RETRIES = 2
 IMAGE_MODEL_OPTIONS = [
     "wan2.7-image-pro",
@@ -302,14 +304,14 @@ def build_visual_assets_from_package(package: dict) -> list[dict]:
     templates = [
         ("render_1", "产品效果图 1", "1024x1024", "单张专业产品效果图，45度主视角，单一产品主体，白色或浅灰干净背景，真实PBR材质、圆角、阴影、高光和核心交互区清晰可见；不是拼图，不是九宫格。"),
         ("render_2", "产品效果图 2", "1024x1024", "单张专业产品效果图，从略高的30度侧前方观察同一款产品，展示上盖、主控区和分格结构；不是拼图，不是九宫格。"),
-        ("exploded", "产品爆炸图", "1024x1792", "单张立体写实爆炸图：等距轴测视角，所有同款产品零部件沿中心垂直装配轴从上到下真实分离并分层悬浮；部件必须有厚度、圆角、透视、真实阴影和 PBR 材质高光。展示外壳、功能模块、内部空间、连接件、可维护部件和装配关系；不是平面示意图、不是多宫格、不是拼贴图、不是另一款产品。"),
+        ("exploded", "产品爆炸图", "1024x1792", f"单张立体写实爆炸图：等距轴测视角，所有同款产品零部件沿中心垂直装配轴从上到下真实分离并分层悬浮；部件必须有厚度、圆角、透视、真实阴影和 PBR 材质高光。展示外壳、唯一功能托盘、真实内部模块、连接件、紧固件和装配关系；不是平面示意图、不是多宫格、不是拼贴图、不是另一款产品。{exploded_view_component_constraints(product_name)}"),
         ("detail", "产品细节图", "1024x1024", "产品细节特写图，只放大同一款产品上的关键结构、材质、开启方式、按键、屏幕、提示灯或连接细节，微距摄影质感。"),
         ("three_view", "产品三视图", "1792x1024", "工业设计三视图，同一产品以统一比例展示正视图、侧视图和俯视图，严格对齐，白色背景，无透视变形，适合工程表达。"),
         ("board", "设计展板", "1600x2200", "设计展板，整合产品效果图、爆炸图、细节图、三视图、使用效果图、需求分析和功能结构映射；信息层级清晰，少文字，多图像，适合论文和开题展示。"),
         ("usage_1", "产品使用效果图 1", "1024x1024", "单张真实使用场景图，目标用户在自然生活环境中使用同一款产品，人物动作、产品尺度、空间关系和核心功能表达真实合理；不是拼图，不是九宫格。"),
         ("usage_2", "产品使用效果图 2", "1024x1024", "单张真实使用场景图，从另一自然视角展示同一款产品被目标用户操作或提醒，产品轮廓、材料、分格数量和核心交互区必须与母版完全一致；不是拼图，不是九宫格。"),
     ]
-    return [
+    assets = [
         {
             "key": key,
             "label": label,
@@ -318,6 +320,7 @@ def build_visual_assets_from_package(package: dict) -> list[dict]:
         }
         for index, (key, label, size, prompt) in enumerate(templates, start=1)
     ]
+    return ensure_visual_asset_constraints(product_name, assets)
 
 
 def get_visual_assets(package: dict | None) -> list[dict]:
@@ -327,7 +330,7 @@ def get_visual_assets(package: dict | None) -> list[dict]:
     valid_assets = [asset for asset in visual_assets if str(asset.get("prompt", "")).strip()]
     valid_keys = {str(asset.get("key") or "") for asset in valid_assets}
     if len(valid_assets) >= 8 and {"render_1", "render_2", "usage_1", "usage_2"}.issubset(valid_keys):
-        return valid_assets[:8]
+        return ensure_visual_asset_constraints(str(package.get("target_product") or "product"), valid_assets[:8])
     return build_visual_assets_from_package(package)
 
 
@@ -614,17 +617,19 @@ def render_copy_all_prompts_button(prompt_text: str, key: str) -> None:
     html = f"""
         <button id="{button_id}" style="width:100%;height:38px;border:1px solid #c9daf8;border-radius:8px;background:#fff;color:#17345f;font-weight:650;cursor:pointer;">复制全部 prompt</button>
         <script>
-          const button = document.getElementById({json.dumps(button_id)});
-          const promptText = {payload};
-          button.addEventListener('click', async () => {{
-            try {{
-              await navigator.clipboard.writeText(promptText);
-              button.textContent = '已复制全部 prompt';
-              setTimeout(() => button.textContent = '复制全部 prompt', 1600);
-            }} catch (error) {{
-              button.textContent = '复制失败，请使用每条 prompt 的复制图标';
-            }}
-          }});
+          (() => {{
+            const button = document.getElementById({json.dumps(button_id)});
+            const promptText = {payload};
+            button.addEventListener('click', async () => {{
+              try {{
+                await navigator.clipboard.writeText(promptText);
+                button.textContent = '已复制全部 prompt';
+                setTimeout(() => button.textContent = '复制全部 prompt', 1600);
+              }} catch (error) {{
+                button.textContent = '复制失败，请使用每条 prompt 的复制图标';
+              }}
+            }});
+          }})();
         </script>
         """
     if hasattr(st, "html") and "unsafe_allow_javascript" in inspect.signature(st.html).parameters:

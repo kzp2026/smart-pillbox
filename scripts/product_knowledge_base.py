@@ -80,7 +80,7 @@ VISUAL_ASSET_TEMPLATES = [
         "key": "exploded",
         "label": "产品爆炸图",
         "size": "1024x1792",
-        "prompt": "单张完整爆炸图，沿中心垂直装配轴从上到下分层悬浮，展示外壳、功能模块、内部空间、连接件、可维护部件和装配关系；不是多宫格，不是拼贴图，不是另一款产品。",
+        "prompt": "单张完整爆炸图，沿中心垂直装配轴从上到下分层悬浮，逐层展示外壳、唯一功能托盘、真实内部功能模块、连接件、紧固件和装配关系；不同层必须是不同零部件，不得重复复制同一外壳或托盘；不是多宫格，不是拼贴图，不是另一款产品。",
     },
     {
         "key": "detail",
@@ -124,6 +124,36 @@ def product_visual_constraints(product_name: str) -> str:
     return f"固定为同一款{product_name}，不得生成其他品类、替代产品、多方案拼贴或与{product_name}无关的对象。"
 
 
+def exploded_view_component_constraints(product_name: str) -> str:
+    """Return product-specific assembly constraints for a physically meaningful exploded view."""
+    general = (
+        "爆炸图组件真实性约束：每一层必须是功能不同且可装配的真实零部件，按唯一装配顺序对齐；"
+        "禁止复制同一个外壳、容器、托盘或分格板来凑层数，禁止出现多个完整产品。"
+    )
+    if "药盒" not in product_name:
+        return general
+    return (
+        f"{general} 智能药盒从上到下只允许这些层级：透明上盖 1 件、防潮密封圈 1 件、"
+        "药格托盘只允许出现 1 层、上壳体 1 件、前置显示与指示灯模块 1 件、带 MCU 和无线通信芯片的主控 PCB 1 件、"
+        "蜂鸣器或扬声器 1 件、振动马达 1 件、锂电池 1 件、USB-C 充电小板与接口 1 组、连接排线与少量螺钉、下壳体 1 件、"
+        "防滑底垫 1 件。必须清楚看见 PCB、芯片、电池、扬声器、马达、充电接口和排线；"
+        "不得用重复药格托盘代替内部零件，不得生成两层或更多药格，不得把多个收纳盒叠在一起。"
+    )
+
+
+def ensure_visual_asset_constraints(target_product: str, assets: list[dict]) -> list[dict]:
+    """Upgrade saved visual prompts without mutating historic generation records."""
+    upgraded: list[dict] = []
+    exploded_constraints = exploded_view_component_constraints(target_product)
+    for asset in assets:
+        current = dict(asset)
+        prompt = clean_text(current.get("prompt", ""))
+        if current.get("key") == "exploded" and "爆炸图组件真实性约束" not in prompt:
+            current["prompt"] = f"{prompt}\n\n{exploded_constraints}".strip()
+        upgraded.append(current)
+    return upgraded
+
+
 def build_visual_identity_lock(target_product: str, demand_text: str, requirements: list[dict], comments: list[dict]) -> str:
     requirement_text = "；".join(clean_text(item.get("title", "")) for item in requirements[:4] if item.get("title"))
     evidence_text = "；".join(clean_text(item.get("comment_original", "")) for item in comments[:2] if item.get("comment_original"))
@@ -155,7 +185,7 @@ def build_visual_assets(
             f"产品名称必须明确是{target_product}，画面只服务于当前这一款产品。"
         )
         assets.append({**template, "prompt": prompt})
-    return assets
+    return ensure_visual_asset_constraints(target_product, assets)
 
 
 def keyword_score(query: str, *values: object) -> int:

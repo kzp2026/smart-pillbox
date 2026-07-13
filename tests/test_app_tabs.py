@@ -129,6 +129,7 @@ class AppTabsTests(unittest.TestCase):
         for snippet in [
             "复制全部 prompt",
             "navigator.clipboard.writeText",
+            "(() => {",
             "st.html(",
             "unsafe_allow_javascript=True",
             "inspect.signature(st.html).parameters",
