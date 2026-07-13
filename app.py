@@ -19,10 +19,8 @@ from scripts.common import build_cleaned_dataframe
 from scripts.product_knowledge_base import (
     DEFAULT_DB_PATH,
     ProductKnowledgeBase,
-    adaptive_board_style_constraints,
     generate_design_package,
     normalize_database_url,
-    usage_scene_geometry_constraints,
 )
 from scripts.upload_parsing import candidate_comment_columns, default_comment_column, extract_comments, read_upload_table
 from scripts.visual_asset_quality import evaluate_visual_asset
@@ -44,6 +42,29 @@ IMAGE_MODEL_OPTIONS = [
     "qwen-image-plus",
     "wan2.2-t2i-plus",
 ]
+
+
+def usage_scene_geometry_constraints(asset_key: str) -> str:
+    if asset_key == "usage_1":
+        return (
+            "人物与产品几何关系硬约束：产品必须稳定平放在桌面，透明上盖仅由真实铰链支撑；"
+            "人物双手完整可见并与产品外壳、透明上盖、药格及药片保持明显可见间距，"
+            "不得握持产品、扶住上盖或把手伸入药格；任何手指都不得穿过、嵌入或遮断产品边缘和透明材质。"
+        )
+    if asset_key == "usage_2":
+        return (
+            "人物与产品几何关系硬约束：若出现手部，只允许五指完整、关节自然地接触不透明外壳侧边或实体按键；"
+            "不得接触或穿过透明上盖、药格、药片及产品内部，不得出现多余、粘连、畸形或被产品截断的手指。"
+        )
+    return ""
+
+
+def adaptive_board_style_constraints() -> str:
+    return (
+        "展板视觉自适应约束：从产品效果图提取产品主色与材质气质，使用低饱和协调背景、清晰文字对比和适量强调色；"
+        "根据图片横竖比、内容密度和视觉重心自适应安排主视觉、爆炸图、细节、三视图、场景、需求、功能和规格模块，"
+        "不得机械复制固定网格模板，必须保持美观、留白和信息层级。"
+    )
 OPENAI_IMAGE_MODEL_OPTIONS = [
     "gpt-image-2",
     "gpt-image-1.5",
