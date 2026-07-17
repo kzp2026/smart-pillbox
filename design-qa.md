@@ -1,3 +1,5 @@
+# Original interface QA record
+
 **Source Visual Truth Path**
 - `C:\Users\15854\.codex\generated_images\019f25ec-7980-7d52-9cef-9c4510c39bd7\ig_02a5390d07e37add016a48d53947908191b97c0469506411a2.png`
 
@@ -39,3 +41,48 @@
 - A future pass can replace Streamlit's native multipage navigation with a custom navigation shell if the app moves away from Streamlit defaults.
 
 final result: passed
+
+---
+
+# V2 Design QA
+
+**Final result: PASSED**
+
+## Visual source
+
+- Reference: `C:/Users/15854/AppData/Local/Temp/codex-clipboard-90f8cae9-bd85-4a4b-acb9-16ca5ac484a4.png`
+- Desktop capture: `docs/qa/v2-desktop-1440x1000.png`
+- Mobile capture: `docs/qa/v2-mobile-390x844.png`
+
+The reference and final desktop capture were reviewed together in one comparison pass.
+
+## Desktop — 1440 × 1000
+
+- Viewport reported `1440 × 1000`.
+- Main client width and scroll width both reported `1130 px`; no horizontal overflow.
+- Permanent left rail, top service pills, seven-stage process, four metric cards, action cards, results area, dark navy circuit background and bottom-right assistant all match the supplied visual direction.
+- Top white Streamlit chrome was removed after browser inspection.
+- Empty-state content remains intentionally visible until the approved migration is executed; migrated products, counts, history and images populate the same regions.
+
+## Mobile — 390 × 844
+
+- Viewport reported `390 × 844`.
+- Main client width and scroll width both reported `380 px`; no page-level horizontal overflow.
+- Metric and action cards stack to one column.
+- Seven-stage rail remains horizontally scrollable without forcing page overflow.
+- A sticky mobile navigation selector is present because Streamlit collapses the desktop sidebar at this breakpoint.
+- Login, main content and bottom-right assistant remain readable without clipped primary controls.
+
+## Functional visual checks
+
+- Private login renders before any business-data connection.
+- Correct login opens the private dashboard.
+- All nine navigation pages render without Streamlit exceptions.
+- Desktop and mobile navigation controls are synchronized.
+- Service values are masked; no API key or password hash is rendered.
+- Buttons use Streamlit Material icons; generated background, brand mark and assistant are real raster assets.
+
+## Accepted data-dependent differences
+
+- The reference contains populated products and generated images. The QA database is intentionally empty, so the final capture shows empty-state copy instead of fabricated records.
+- After migration, real products, comments, requirements, historical runs, documents and image artifacts occupy the preserved overview and result regions.
