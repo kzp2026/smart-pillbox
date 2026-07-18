@@ -23,6 +23,8 @@ Use this Skill to create, extend, repair, verify, or deploy the private V2 witho
 - Preserve every existing result, effect image, download, history path, the 10 legacy stages, and the 7 V2 stage groups.
 - Treat migration as an explicit, idempotent copy: dry-run, confirm, apply, count, and hash-check. Never mutate the source.
 - Put credentials only in server-side Secrets. Mask configuration status and sanitize errors.
+- Keep the sidebar shortcut for the DashScope image key, but render only a placeholder template that directs the owner to Streamlit Secrets; never accept or persist the key in a page field.
+- Keep page switching fast: load the workspace progress counters in one query, reuse read-only view data for 30 seconds, invalidate the private scope immediately after every write, and serve the visual shell from the optimized WebP runtime assets instead of re-sending multi-megabyte PNG data URIs.
 - Require explicit confirmation for deletion, migration writes, archive restore, and paid image generation.
 
 ## Execution Workflow
@@ -31,7 +33,7 @@ Use this Skill to create, extend, repair, verify, or deploy the private V2 witho
 2. Write the smallest failing test before implementation. For UI work, define the browser state and viewport that currently fails.
 3. Change the narrowest V2 layer: UI → application use case → adapter/provider. Keep SQL, deletion, and external API calls out of UI code.
 4. For schema or migration changes, use additive numbered migrations, fixed `owner_id`, parameterized SQL, RLS/revokes, idempotency, and rollback-safe deployment order.
-5. For visual changes, retain the supplied dark control-console direction, real raster assets, mobile behavior, readable focus states, and populated/empty/error states.
+5. For visual changes, retain the supplied dark control-console direction, real raster assets, mobile behavior, readable focus states, populated/empty/error states, and matching dark styles for upload, download, link, password-toggle, primary, secondary, hover and disabled controls.
 6. Run targeted tests, the contract verifier, the full regression suite, and browser/visual checks proportional to the change.
 7. Re-open the original site after V2 verification and confirm its protected hashes and primary journey still pass.
 

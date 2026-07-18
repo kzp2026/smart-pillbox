@@ -10,7 +10,15 @@ from pathlib import Path
 from typing import Iterator, Sequence
 
 from v2.adapters.storage import StoredArtifact
-from v2.domain.models import ArtifactKind, CreateRunCommand, ImportReport, PipelineRun, ProductSummary, RunStatus
+from v2.domain.models import (
+    ArtifactKind,
+    CreateRunCommand,
+    ImportReport,
+    PipelineRun,
+    ProductSummary,
+    RunStatus,
+    WorkspaceSnapshot,
+)
 
 
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -681,6 +689,38 @@ class KnowledgeRepository:
                 (self.owner_id,),
             ).fetchone()
         return int(row["count"] or 0)
+
+    def workspace_snapshot(self) -> WorkspaceSnapshot:
+        """Return all navigation counters in one database round-trip."""
+        with self.connect() as connection:
+            row = connection.execute(
+                self._sql(
+                    "SELECT "
+                    "(SELECT COUNT(*) FROM products WHERE owner_id = ?) AS product_count, "
+                    "(SELECT COUNT(*) FROM comments WHERE owner_id = ?) AS comment_count, "
+                    "(SELECT COUNT(*) FROM requirements WHERE owner_id = ?) AS requirement_count, "
+                    "(SELECT COUNT(*) FROM generation_runs WHERE owner_id = ?) AS generation_run_count, "
+                    "(SELECT COUNT(*) FROM artifacts WHERE owner_id = ?) AS artifact_count, "
+                    "(SELECT COUNT(*) FROM artifacts WHERE owner_id = ? AND kind = ?) AS image_count"
+                ),
+                (
+                    self.owner_id,
+                    self.owner_id,
+                    self.owner_id,
+                    self.owner_id,
+                    self.owner_id,
+                    self.owner_id,
+                    ArtifactKind.IMAGE.value,
+                ),
+            ).fetchone()
+        return WorkspaceSnapshot(
+            product_count=int(row["product_count"] or 0),
+            comment_count=int(row["comment_count"] or 0),
+            requirement_count=int(row["requirement_count"] or 0),
+            generation_run_count=int(row["generation_run_count"] or 0),
+            artifact_count=int(row["artifact_count"] or 0),
+            image_count=int(row["image_count"] or 0),
+        )
 
     def _upsert_product(self, connection: object, name: str, category: str, now: str) -> int:
         if not name:

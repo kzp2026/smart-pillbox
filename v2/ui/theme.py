@@ -12,16 +12,18 @@ ASSET_DIR = Path(__file__).resolve().parents[1] / "assets"
 
 def asset_data_uri(path: str | Path) -> str:
     asset = Path(path)
-    mime = mimetypes.guess_type(asset.name)[0] or "application/octet-stream"
+    mime = "image/webp" if asset.suffix.lower() == ".webp" else (
+        mimetypes.guess_type(asset.name)[0] or "application/octet-stream"
+    )
     encoded = base64.b64encode(asset.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{encoded}"
 
 
 def default_asset_urls() -> dict[str, str]:
     return {
-        "background": asset_data_uri(ASSET_DIR / "studio-background.png"),
-        "logo": asset_data_uri(ASSET_DIR / "ai-brand-mark.png"),
-        "mascot": asset_data_uri(ASSET_DIR / "assistant-mascot.png"),
+        "background": asset_data_uri(ASSET_DIR / "studio-background.webp"),
+        "logo": asset_data_uri(ASSET_DIR / "ai-brand-mark.webp"),
+        "mascot": asset_data_uri(ASSET_DIR / "assistant-mascot.webp"),
     }
 
 
@@ -47,6 +49,8 @@ def build_theme_css(asset_urls: Mapping[str, str]) -> str:
   --v2-danger: #ff6b81;
   --v2-radius: 14px;
 }}
+
+html {{ color-scheme: dark; }}
 
 html, body, [class*="css"] {{
   font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -387,24 +391,80 @@ h1 {{
   border-radius: 12px;
 }}
 
-.stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] > button {{
+.stButton > button,
+.stDownloadButton > button,
+[data-testid="stFormSubmitButton"] > button,
+[data-testid="stFileUploaderDropzone"] button,
+[data-testid="stLinkButton"] a {{
   min-height: 40px;
-  color: #eef8ff;
+  color: #eef8ff !important;
   font-weight: 700;
-  background: #0a56bd;
-  border: 1px solid #2da9ff;
-  border-radius: 9px;
+  background: #0a56bd !important;
+  border: 1px solid #2da9ff !important;
+  border-radius: 9px !important;
   box-shadow: 0 0 18px rgba(22, 139, 255, 0.18);
+  touch-action: manipulation;
 }}
-.stButton > button:hover, .stDownloadButton > button:hover, [data-testid="stFormSubmitButton"] > button:hover {{
-  color: #ffffff;
-  background: #116edb;
-  border-color: var(--v2-cyan);
+.stButton > button:hover,
+.stDownloadButton > button:hover,
+[data-testid="stFormSubmitButton"] > button:hover,
+[data-testid="stFileUploaderDropzone"] button:hover,
+[data-testid="stLinkButton"] a:hover {{
+  color: #ffffff !important;
+  background: #116edb !important;
+  border-color: var(--v2-cyan) !important;
 }}
 
 .stButton > button[kind="secondary"], .stDownloadButton > button[kind="secondary"] {{
-  background: #0b1b34;
-  border-color: rgba(108, 151, 210, 0.43);
+  background: #0b1b34 !important;
+  border-color: rgba(108, 151, 210, 0.43) !important;
+}}
+
+.stButton > button:disabled,
+.stDownloadButton > button:disabled,
+[data-testid="stFormSubmitButton"] > button:disabled {{
+  color: #667c98 !important;
+  background: #08152a !important;
+  border-color: rgba(91, 121, 160, 0.28) !important;
+  box-shadow: none;
+}}
+
+[data-testid="stFileUploaderDropzone"] {{
+  color: var(--v2-text) !important;
+}}
+
+[data-testid="stFileUploaderDropzone"] small,
+[data-testid="stFileUploaderDropzone"] span {{
+  color: var(--v2-muted) !important;
+}}
+
+[data-baseweb="input"] button {{
+  color: #cde8ff !important;
+  background: #081a38 !important;
+  border-left: 1px solid rgba(90, 139, 203, 0.42) !important;
+}}
+
+[data-baseweb="input"] button:hover {{
+  color: #ffffff !important;
+  background: #0a2a54 !important;
+}}
+
+[data-testid="stCode"], [data-testid="stCode"] pre {{
+  color: #dff2ff !important;
+  background: #06152e !important;
+  border-color: rgba(90, 139, 203, 0.42) !important;
+}}
+
+[data-testid="stCode"] button {{
+  color: #cde8ff !important;
+  background: #0b1b34 !important;
+  border: 1px solid rgba(108, 151, 210, 0.43) !important;
+}}
+
+[data-testid="stCode"] button:hover {{
+  color: #ffffff !important;
+  background: #0a2a54 !important;
+  border-color: var(--v2-cyan) !important;
 }}
 
 button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {{
@@ -416,6 +476,15 @@ input, textarea, [data-baseweb="select"] > div {{
   color: #f2f8ff !important;
   background: #06152e !important;
   border-color: rgba(90, 139, 203, 0.42) !important;
+}}
+
+[data-baseweb="popover"], [role="listbox"], [role="option"] {{
+  color: var(--v2-text) !important;
+  background-color: #07152e !important;
+}}
+
+[role="option"]:hover, [role="option"][aria-selected="true"] {{
+  background-color: #0a2a54 !important;
 }}
 
 [data-baseweb="tab-list"] {{
@@ -451,7 +520,7 @@ input, textarea, [data-baseweb="select"] > div {{
   .v2-process {{ grid-template-columns: repeat(7, 104px); }}
   .v2-metrics, .v2-action-grid {{ grid-template-columns: 1fr; }}
   .v2-product-row {{ grid-template-columns: 1fr 1fr; gap: 7px; }}
-  .v2-mascot {{ width: 72px; height: 72px; right: 10px; bottom: 8px; border-radius: 22px; }}
+  .v2-mascot {{ display: none; }}
   .v2-login-card {{ padding: 20px 16px; }}
   .st-key-v2_mobile_nav {{
     display: block;

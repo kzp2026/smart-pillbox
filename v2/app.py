@@ -11,7 +11,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,9 +27,10 @@ from v2.application.history import HistoryService, RunDetail
 from v2.application.image_generation import ImageGenerationService
 from v2.application.imports import ImportService
 from v2.application.migration import MigrationService
+from v2.application.view_cache import ExpiringViewCache
 from v2.auth import LoginGuard, SessionClock
 from v2.config import AppConfig, ConfigError
-from v2.domain.models import ArtifactKind, CreateRunCommand
+from v2.domain.models import ArtifactKind, CreateRunCommand, WorkspaceSnapshot
 from v2.pipeline.catalog import LEGACY_STAGES
 from v2.pipeline.runner import PipelineRunner, SubprocessStageExecutor
 from v2.providers.images import ExistingImageProvider
@@ -64,6 +65,7 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _LOGIN_GUARDS: dict[str, LoginGuard] = {}
 _REPOSITORIES: dict[tuple[str, str, str], KnowledgeRepository] = {}
 _STORES: dict[tuple[str, ...], object] = {}
+_VIEW_CACHE: ExpiringViewCache[Any] = ExpiringViewCache(ttl_seconds=30)
 
 
 def masked_service_summary(config: AppConfig) -> dict[str, str]:
@@ -79,6 +81,72 @@ def masked_service_summary(config: AppConfig) -> dict[str, str]:
         "图像服务": "已配置" if config.image_api_key else "未配置",
         "图像模型": config.image_model,
     }
+
+
+def secret_configuration_template(config: AppConfig) -> str:
+    """Build a copyable template without ever rendering current secret values."""
+    model = config.image_model.strip() or "wan2.7-image-pro"
+    return (
+        '# 在 Streamlit Cloud：管理应用 → Settings → Secrets\n'
+        'V2_IMAGE_PROVIDER = "dashscope"\n'
+        f"V2_IMAGE_MODEL = {json.dumps(model, ensure_ascii=False)}\n"
+        'V2_IMAGE_API_KEY = "<填写阿里云百炼 DashScope API Key>"'
+    )
+
+
+def _repository_scope(repository: KnowledgeRepository) -> str:
+    return hashlib.sha256(
+        f"{repository.database_url}\x1f{repository.owner_id}\x1f{repository.schema}".encode("utf-8")
+    ).hexdigest()
+
+
+def _cached_view(
+    repository: KnowledgeRepository,
+    category: str,
+    loader: Callable[[], Any],
+    *parts: object,
+) -> Any:
+    return _VIEW_CACHE.get((_repository_scope(repository), category, *parts), loader)
+
+
+def _invalidate_view_cache(repository: KnowledgeRepository | None = None) -> None:
+    if repository is None:
+        _VIEW_CACHE.invalidate()
+    else:
+        _VIEW_CACHE.invalidate((_repository_scope(repository),))
+
+
+def _workspace_snapshot(repository: KnowledgeRepository) -> WorkspaceSnapshot:
+    def load() -> WorkspaceSnapshot:
+        try:
+            return repository.workspace_snapshot()
+        except Exception:
+            return WorkspaceSnapshot(healthy=False)
+
+    return _cached_view(repository, "workspace-snapshot", load)
+
+
+def _cached_products(repository: KnowledgeRepository):
+    return _cached_view(repository, "products", repository.list_products)
+
+
+def _cached_runs(history: HistoryService, limit: int):
+    return _cached_view(
+        history.repository,
+        "pipeline-runs",
+        lambda: history.list_runs(limit),
+        int(limit),
+    )
+
+
+def _cached_run_detail(history: HistoryService, run_id: str, include_data: bool):
+    return _cached_view(
+        history.repository,
+        "run-detail",
+        lambda: history.reopen(run_id, include_artifact_data=include_data),
+        run_id,
+        bool(include_data),
+    )
 
 
 def _config_values(st_module: object) -> dict[str, object]:
@@ -194,6 +262,7 @@ def _render_login(st_module: object, config: AppConfig) -> None:
 
 
 def _logout(st_module: object) -> None:
+    _invalidate_view_cache()
     for key in tuple(st_module.session_state.keys()):
         if str(key).startswith("v2_") or str(key).startswith("login_"):
             del st_module.session_state[key]
@@ -204,13 +273,19 @@ def _sync_navigation(st_module: object, source_key: str, target_key: str) -> Non
     st_module.session_state[target_key] = st_module.session_state[source_key]
 
 
+def _open_key_settings(st_module: object) -> None:
+    target = "设置与迁移"
+    st_module.session_state["v2_navigation"] = target
+    st_module.session_state["v2_mobile_navigation"] = target
+
+
 def _render_sidebar(st_module: object, config: AppConfig) -> str:
     with st_module.sidebar:
         st_module.markdown(brand_html(), unsafe_allow_html=True)
         navigation = st_module.radio(
             "工作台导航",
             NAV_ITEMS,
-            index=2,
+            index=None if "v2_navigation" in st_module.session_state else 2,
             key="v2_navigation",
             label_visibility="visible",
             on_change=_sync_navigation,
@@ -221,6 +296,13 @@ def _render_sidebar(st_module: object, config: AppConfig) -> str:
         st_module.markdown("#### 服务状态")
         for name, state in summary.items():
             st_module.caption(f"{name} · {state}")
+        st_module.button(
+            "配置百炼效果图 Key",
+            icon=":material/key:",
+            use_container_width=True,
+            on_click=_open_key_settings,
+            args=(st_module,),
+        )
         st_module.divider()
         st_module.caption("私有空间 · 单用户 · 8 小时无操作自动退出")
         st_module.button(
@@ -254,36 +336,25 @@ def _render_mobile_navigation(st_module: object) -> str:
     return str(navigation)
 
 
-def _service_is_healthy(repository: KnowledgeRepository) -> bool:
-    try:
-        repository.count_rows("products")
-    except Exception:
-        return False
-    return True
-
-
-def _completed_steps(repository: KnowledgeRepository) -> set[int]:
+def _completed_steps(snapshot: WorkspaceSnapshot) -> set[int]:
     completed: set[int] = set()
-    try:
-        if repository.count_rows("comments"):
-            completed.add(0)
-        if repository.count_rows("requirements"):
-            completed.add(1)
-        if repository.count_rows("products"):
-            completed.add(2)
-        if repository.count_rows("generation_runs"):
-            completed.update({4, 5})
-        if any(str(item.get("kind")) == ArtifactKind.IMAGE.value for item in repository.list_artifacts()):
-            completed.add(6)
-    except Exception:
-        return completed
+    if snapshot.comment_count:
+        completed.add(0)
+    if snapshot.requirement_count:
+        completed.add(1)
+    if snapshot.product_count:
+        completed.add(2)
+    if snapshot.generation_run_count:
+        completed.update({4, 5})
+    if snapshot.image_count:
+        completed.add(6)
     return completed
 
 
 def _render_header(
     st_module: object,
     config: AppConfig,
-    repository: KnowledgeRepository,
+    snapshot: WorkspaceSnapshot,
     navigation: str,
 ) -> None:
     summary = masked_service_summary(config)
@@ -292,7 +363,7 @@ def _render_header(
             database=summary["数据库"],
             text_model=config.deepseek_model if config.deepseek_api_key else "离线规则",
             image_model=config.image_model,
-            healthy=_service_is_healthy(repository),
+            healthy=snapshot.healthy,
         ),
         unsafe_allow_html=True,
     )
@@ -301,7 +372,7 @@ def _render_header(
         st_module.markdown(
             process_bar_html(
                 active_index=active_index,
-                completed_indices=_completed_steps(repository),
+                completed_indices=_completed_steps(snapshot),
             ),
             unsafe_allow_html=True,
         )
@@ -327,7 +398,7 @@ def _current_detail(
     history: HistoryService,
     include_data: bool = True,
 ) -> RunDetail | None:
-    runs = history.list_runs(50)
+    runs = _cached_runs(history, 50)
     if not runs:
         return None
     known_ids = {run.id for run in runs}
@@ -336,7 +407,7 @@ def _current_detail(
         selected = runs[0].id
         st_module.session_state["v2_current_run_id"] = selected
     try:
-        return history.reopen(selected, include_artifact_data=include_data)
+        return _cached_run_detail(history, selected, include_data)
     except Exception as exc:
         st_module.error(
             public_error_message("读取历史结果失败", exc, guidance="请刷新后重试。")
@@ -348,15 +419,15 @@ def _render_overview(
     st_module: object,
     repository: KnowledgeRepository,
     history: HistoryService,
+    snapshot: WorkspaceSnapshot,
 ) -> None:
-    products = repository.list_products()
-    runs = history.list_runs(8)
-    artifacts = repository.list_artifacts()
+    products = _cached_products(repository)
+    runs = _cached_runs(history, 8)
     updated = products[0].updated_at[:16].replace("T", " ") if products else "暂无数据"
     st_module.markdown(panel_open_html("知识库概览", "独立 V2 私有知识库") + metric_grid_html([
         ("产品资产", len(products), "个产品", "blue"),
-        ("评论沉淀", repository.count_rows("comments"), "条评论", "cyan"),
-        ("需求证据", repository.count_rows("requirements"), "条有效证据", "violet"),
+        ("评论沉淀", snapshot.comment_count, "条评论", "cyan"),
+        ("需求证据", snapshot.requirement_count, "条有效证据", "violet"),
         ("最近更新", updated, "数据库时间", "amber"),
     ]) + "</section>", unsafe_allow_html=True)
 
@@ -392,7 +463,7 @@ def _render_overview(
             unsafe_allow_html=True,
         )
 
-    st_module.markdown(panel_open_html("结果预览", f"{len(artifacts)} 个归档文件") + "</section>", unsafe_allow_html=True)
+    st_module.markdown(panel_open_html("结果预览", f"{snapshot.artifact_count} 个归档文件") + "</section>", unsafe_allow_html=True)
     if not runs:
         st_module.info("还没有运行记录。导入评论后即可开始完整分析与生成。")
     else:
@@ -428,6 +499,7 @@ def _render_overview(
                 description = st_module.text_area("产品说明", selected.description)
                 if st_module.form_submit_button("保存修改", icon=":material/save:"):
                     repository.update_product(selected.id, name, category, description)
+                    _invalidate_view_cache(repository)
                     st_module.success("产品信息已更新。")
                     st_module.rerun()
             confirm_delete = st_module.checkbox(
@@ -441,6 +513,7 @@ def _render_overview(
                 type="secondary",
             ):
                 repository.delete_product(selected.id)
+                _invalidate_view_cache(repository)
                 st_module.success("产品及其关联评论、需求已删除。运行历史未被误删。")
                 st_module.rerun()
 
@@ -511,6 +584,7 @@ def _render_import(
             result = ImportService(repository).import_comments(
                 product_name, category, uploaded.name, comments
             )
+            _invalidate_view_cache(repository)
             run_id, input_path = _create_import_run(
                 repository, store, product_name, uploaded.name, data
             )
@@ -559,7 +633,10 @@ def _render_import(
         run_all_column, run_stage_column = st_module.columns(2)
         if run_all_column.button("运行全部 10 个阶段", icon=":material/play_arrow:"):
             with st_module.spinner("正在运行完整流水线，请勿关闭页面……"):
-                result = runner.run_all(str(run_id), str(last_product), str(input_path))
+                try:
+                    result = runner.run_all(str(run_id), str(last_product), str(input_path))
+                finally:
+                    _invalidate_view_cache(repository)
             if result.failed_stage_id:
                 st_module.warning(
                     f"已保留前 {len(result.completed_stage_ids)} 个成功阶段；阶段 {result.failed_stage_id} 失败。"
@@ -568,9 +645,12 @@ def _render_import(
                 st_module.success("完整流水线运行成功，所有结果已写入私有归档。")
         if run_stage_column.button("运行选中阶段", icon=":material/step_into:"):
             with st_module.spinner(f"正在运行阶段 {selected_stage.id} · {selected_stage.label}……"):
-                result = runner.run_stage(
-                    str(run_id), selected_stage.id, str(last_product), str(input_path)
-                )
+                try:
+                    result = runner.run_stage(
+                        str(run_id), selected_stage.id, str(last_product), str(input_path)
+                    )
+                finally:
+                    _invalidate_view_cache(repository)
             if result.failed_stage_id:
                 st_module.warning(
                     f"阶段 {selected_stage.id} 运行失败；已有历史结果未被覆盖，请检查前序依赖或服务配置。"
@@ -646,7 +726,7 @@ def _render_demand(
     store: object,
 ) -> None:
     st_module.markdown("### 需求生成与设计任务")
-    products = repository.list_products()
+    products = _cached_products(repository)
     options = [item.name for item in products]
     default_product = options[0] if options else ""
     target_product = st_module.text_input("目标产品", value=default_product)
@@ -707,6 +787,7 @@ def _render_demand(
             service, text_provider = _generation_services(config, repository)
             provided_token = preview.confirmation_token if confirmed else None
             run = service.confirm_and_start(command, preview, provided_token)
+            _invalidate_view_cache(repository)
             with st_module.spinner("正在检索私有证据并生成设计方案……"):
                 generated = service.generate_design(
                     run.id,
@@ -731,6 +812,7 @@ def _render_demand(
             else:
                 st_module.success("设计方案与工业设计 Prompt 已生成。")
             st_module.session_state["v2_current_run_id"] = run.id
+            _invalidate_view_cache(repository)
             st_module.session_state.pop("v2_generation_preview", None)
             st_module.session_state.pop("v2_generation_command", None)
 
@@ -895,12 +977,14 @@ def _render_images(
         service, text_provider = _generation_services(config, repository)
         preview = service.preview(command, secrets.token_urlsafe(18))
         run = service.confirm_and_start(command, preview, preview.confirmation_token)
+        _invalidate_view_cache(repository)
         constraints = detail.context.get("industrial_constraints") or {}
         generated = service.generate_design(run.id, command, constraints, text_provider)
         report = ImageGenerationService(
             repository, store, ExistingImageProvider(_image_provider_config(config))
         ).generate(run.id, list(generated.package.get("visual_assets") or []), int(count))
         st_module.session_state["v2_current_run_id"] = run.id
+        _invalidate_view_cache(repository)
         if report.failures:
             st_module.warning(f"重新生成完成：成功 {report.succeeded_count}/{report.requested_count} 张。")
         else:
@@ -929,7 +1013,7 @@ def _render_history(
     history: HistoryService,
 ) -> None:
     st_module.markdown("### 历史记录")
-    runs = history.list_runs(100)
+    runs = _cached_runs(history, 100)
     if not runs:
         st_module.info("暂无历史记录。")
     else:
@@ -946,7 +1030,7 @@ def _render_history(
             ),
         )
         st_module.session_state["v2_current_run_id"] = selected_id
-        detail = history.reopen(selected_id, include_artifact_data=True)
+        detail = _cached_run_detail(history, selected_id, True)
         first, second, third, fourth = st_module.columns(4)
         first.metric("状态", detail.run.status.value)
         second.metric("图片计划", detail.run.image_count)
@@ -991,6 +1075,7 @@ def _render_history(
                 CreateRunCommand("恢复的历史结果", "安全 ZIP 归档恢复", "archive", "restored", 0),
                 idempotency_key=f"restore:{digest}",
             )
+            _invalidate_view_cache(repository)
             with tempfile.TemporaryDirectory() as temp_dir:
                 target = Path(temp_dir)
                 extract_archive(archive_bytes, target, ArchiveLimits.default())
@@ -1003,6 +1088,7 @@ def _render_history(
                     stored = store.put(run.id, name, data, mime)
                     repository.record_artifact(run.id, _artifact_kind(name, mime), stored)
             st_module.session_state["v2_current_run_id"] = run.id
+            _invalidate_view_cache(repository)
             st_module.success("归档已恢复到独立 V2 历史记录。")
 
 
@@ -1029,6 +1115,25 @@ def _render_settings(
     store: object,
 ) -> None:
     st_module.markdown("### 设置与迁移")
+    st_module.markdown("#### 百炼效果图 Key 配置")
+    with st_module.container(border=True):
+        if config.image_api_key:
+            st_module.success("阿里云百炼效果图 Key 已配置。页面不会显示或回传原值。")
+        else:
+            st_module.warning("阿里云百炼效果图 Key 尚未配置，AI 效果图生成暂不可用。")
+        st_module.caption(
+            "配置位置：Streamlit Cloud → 我的应用 → 当前 V2 应用 → Settings → Secrets。"
+        )
+        st_module.code(secret_configuration_template(config), language="toml")
+        st_module.link_button(
+            "打开 Streamlit 应用管理",
+            "https://share.streamlit.io/",
+            icon=":material/open_in_new:",
+            use_container_width=True,
+        )
+        st_module.caption("保存 Secrets 后应用会自动重启；重新登录即可生成百炼效果图。")
+
+    st_module.divider()
     st_module.markdown("#### 服务配置（已脱敏）")
     st_module.table(
         [{"服务": name, "状态": value} for name, value in masked_service_summary(config).items()]
@@ -1065,6 +1170,8 @@ def _render_settings(
             st_module.success(f"复制完成：新增 {report.migrated_total} 项，跳过 {report.skipped_total} 项。")
         except Exception as exc:
             st_module.error(public_error_message("复制失败", exc))
+        finally:
+            _invalidate_view_cache(repository)
     if third.button("3. 哈希校验", icon=":material/verified:"):
         try:
             verification = service.verify()
@@ -1128,7 +1235,8 @@ def main() -> None:
     history = HistoryService(repository, store)
     navigation = _render_sidebar(st, config)
     navigation = _render_mobile_navigation(st)
-    _render_header(st, config, repository, navigation)
+    snapshot = _workspace_snapshot(repository)
+    _render_header(st, config, snapshot, navigation)
     st.markdown(mascot_html(), unsafe_allow_html=True)
 
     if navigation == "导入评论资产":
@@ -1136,7 +1244,7 @@ def main() -> None:
     elif navigation == "需求生成":
         _render_demand(st, config, repository, store)
     elif navigation == "知识库概览":
-        _render_overview(st, repository, history)
+        _render_overview(st, repository, history, snapshot)
     elif navigation == "需求-功能-结构图谱":
         _render_graph(st, history)
     elif navigation == "设计方案":

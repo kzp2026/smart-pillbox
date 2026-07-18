@@ -18,6 +18,7 @@
 - 使用 Supabase Shared Transaction Pooler 时，必须从项目顶部 **Connect** 面板完整复制 URI。用户名形如 `postgres.<project-ref>`，端口为 `6543`，密码是 Supabase 数据库密码，不是 V2 登录密码。
 - 不要因为单个新应用连接失败就重置数据库密码。确需重置时，必须同步更新所有使用该数据库的应用，否则原站会失去连接。
 - 保存 Secrets 后等待应用重启，再登录并核对“数据库：PostgreSQL 私有 schema”、产品数、评论数和需求证据数。认证失败时页面只能显示脱敏提示，不得回显连接异常原文。
+- 后续只补阿里云百炼效果图 Key 时，可在 V2 侧栏点击“配置百炼效果图 Key”，复制设置页模板到当前 V2 应用的 Settings → Secrets；只替换 `V2_IMAGE_API_KEY` 占位值，不需要重复填写已配置的 DeepSeek Key。
 
 ## 新建应用
 

@@ -6,9 +6,19 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from v2.app import NAV_ITEMS, STAGE_NAV_ITEMS, masked_service_summary
+from v2.app import (
+    NAV_ITEMS,
+    STAGE_NAV_ITEMS,
+    _cached_run_detail,
+    _cached_runs,
+    _invalidate_view_cache,
+    _workspace_snapshot,
+    masked_service_summary,
+    secret_configuration_template,
+)
 from v2.auth import hash_password
 from v2.config import AppConfig
+from v2.domain.models import WorkspaceSnapshot
 
 
 class AppStructureTests(unittest.TestCase):
@@ -88,6 +98,81 @@ class AppStructureTests(unittest.TestCase):
         self.assertIn("运行全部 10 个阶段", source)
         self.assertIn("运行选中阶段", source)
         self.assertIn("LEGACY_STAGES", source)
+
+    def test_sidebar_exposes_a_direct_dashscope_image_key_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = self._logged_in_app(Path(temp_dir) / "private.sqlite3")
+
+            key_button = next(
+                item for item in app.sidebar.button if item.label == "配置百炼效果图 Key"
+            )
+            key_button.click().run()
+
+            self.assertEqual([], list(app.exception))
+            self.assertTrue(any("百炼效果图 Key 配置" in item.value for item in app.markdown))
+
+    def test_secret_template_uses_placeholders_instead_of_current_keys(self) -> None:
+        config = AppConfig.from_mapping(
+            {
+                "V2_USERNAME": "owner",
+                "V2_PASSWORD_HASH": "scrypt$hash-secret",
+                "V2_DATABASE_URL": "sqlite:///private.sqlite3",
+                "V2_DEEPSEEK_API_KEY": "deepseek-raw-secret",
+                "V2_IMAGE_API_KEY": "image-raw-secret",
+            }
+        )
+
+        template = secret_configuration_template(config)
+
+        self.assertNotIn("V2_DEEPSEEK_API_KEY", template)
+        self.assertIn("V2_IMAGE_API_KEY", template)
+        self.assertNotIn("deepseek-raw-secret", template)
+        self.assertNotIn("image-raw-secret", template)
+
+    def test_navigation_and_history_reads_are_reused_until_a_write_invalidates_them(self) -> None:
+        class FakeRepository:
+            database_url = "sqlite:///cache-integration.sqlite3"
+            owner_id = "private-owner"
+            schema = "agent_v2"
+
+            def __init__(self) -> None:
+                self.snapshot_calls = 0
+
+            def workspace_snapshot(self) -> WorkspaceSnapshot:
+                self.snapshot_calls += 1
+                return WorkspaceSnapshot(product_count=self.snapshot_calls)
+
+        class FakeHistory:
+            def __init__(self, repository: FakeRepository) -> None:
+                self.repository = repository
+                self.list_calls = 0
+                self.detail_calls = 0
+
+            def list_runs(self, limit: int):
+                self.list_calls += 1
+                return [f"run-{limit}"]
+
+            def reopen(self, run_id: str, include_artifact_data: bool = False):
+                self.detail_calls += 1
+                return (run_id, include_artifact_data)
+
+        repository = FakeRepository()
+        history = FakeHistory(repository)
+        _invalidate_view_cache(repository)  # type: ignore[arg-type]
+
+        self.assertEqual(_workspace_snapshot(repository).product_count, 1)  # type: ignore[arg-type]
+        self.assertEqual(_workspace_snapshot(repository).product_count, 1)  # type: ignore[arg-type]
+        self.assertEqual(_cached_runs(history, 50), ["run-50"])  # type: ignore[arg-type]
+        self.assertEqual(_cached_runs(history, 50), ["run-50"])  # type: ignore[arg-type]
+        self.assertEqual(_cached_run_detail(history, "run-1", True), ("run-1", True))  # type: ignore[arg-type]
+        self.assertEqual(_cached_run_detail(history, "run-1", True), ("run-1", True))  # type: ignore[arg-type]
+
+        self.assertEqual(repository.snapshot_calls, 1)
+        self.assertEqual(history.list_calls, 1)
+        self.assertEqual(history.detail_calls, 1)
+
+        _invalidate_view_cache(repository)  # type: ignore[arg-type]
+        self.assertEqual(_workspace_snapshot(repository).product_count, 2)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

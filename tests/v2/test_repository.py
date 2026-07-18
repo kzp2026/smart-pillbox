@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import inspect
+from contextlib import contextmanager
 from pathlib import Path
 
 from v2.adapters.postgres import KnowledgeRepository
@@ -131,6 +132,41 @@ class KnowledgeRepositoryTests(unittest.TestCase):
         source = inspect.getsource(KnowledgeRepository.connect)
 
         self.assertIn("prepare_threshold=None", source)
+
+    def test_workspace_snapshot_uses_one_connection_for_all_navigation_counts(self) -> None:
+        report = self.repo.ingest_comments(
+            "智能药盒", "适老健康", "comments.csv", ["提醒声音太小"]
+        )
+        self.repo.add_requirement_once(
+            report.product_id,
+            report.batch_id,
+            "提醒反馈",
+            "提醒要清晰",
+            ["提醒"],
+            "提醒声音太小",
+            80,
+        )
+        original_connect = self.repo.connect
+        connection_count = 0
+
+        @contextmanager
+        def counted_connect():
+            nonlocal connection_count
+            connection_count += 1
+            with original_connect() as connection:
+                yield connection
+
+        self.repo.connect = counted_connect  # type: ignore[method-assign]
+
+        snapshot = self.repo.workspace_snapshot()
+
+        self.assertEqual(connection_count, 1)
+        self.assertEqual(snapshot.product_count, 1)
+        self.assertEqual(snapshot.comment_count, 1)
+        self.assertEqual(snapshot.requirement_count, 1)
+        self.assertEqual(snapshot.generation_run_count, 0)
+        self.assertEqual(snapshot.artifact_count, 0)
+        self.assertEqual(snapshot.image_count, 0)
 
 
 if __name__ == "__main__":

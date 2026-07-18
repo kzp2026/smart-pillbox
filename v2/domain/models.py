@@ -66,3 +66,14 @@ class ProductSummary:
     requirement_count: int
     created_at: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class WorkspaceSnapshot:
+    product_count: int = 0
+    comment_count: int = 0
+    requirement_count: int = 0
+    generation_run_count: int = 0
+    artifact_count: int = 0
+    image_count: int = 0
+    healthy: bool = True

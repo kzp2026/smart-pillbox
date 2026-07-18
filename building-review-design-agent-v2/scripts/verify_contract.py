@@ -23,6 +23,10 @@ REQUIRED_PATHS = (
     "v2/app.py",
     "v2/auth.py",
     "v2/config.py",
+    "v2/application/view_cache.py",
+    "v2/assets/studio-background.webp",
+    "v2/assets/ai-brand-mark.webp",
+    "v2/assets/assistant-mascot.webp",
     "v2/ui/errors.py",
     "v2/pipeline/catalog.py",
     "v2/migrations/001_agent_v2_schema.sql",
@@ -30,6 +34,7 @@ REQUIRED_PATHS = (
     "tests/v2/test_pipeline_catalog.py",
     "tests/v2/test_auth.py",
     "tests/v2/test_error_messages.py",
+    "tests/v2/test_view_cache.py",
     "tests/v2/test_schema_sql.py",
     "docs/V2_MIGRATION.md",
     "docs/V2_DEPLOY_STREAMLIT_CLOUD.md",
@@ -122,6 +127,28 @@ def verify_static(root: Path) -> list[str]:
     app_source = (root / "v2/app.py").read_text(encoding="utf-8")
     if count_top_level_tuple_items(app_source, "STAGE_NAV_ITEMS") != 7:
         errors.append("V2 页面阶段导航数量不再是 7。")
+    for marker in (
+        "ExpiringViewCache(ttl_seconds=30)",
+        "workspace_snapshot",
+        "配置百炼效果图 Key",
+        "V2_IMAGE_API_KEY",
+    ):
+        if marker not in app_source:
+            errors.append(f"V2 导航性能或百炼 Key 入口契约缺少：{marker}")
+
+    repository_source = (root / "v2/adapters/postgres.py").read_text(encoding="utf-8")
+    if "def workspace_snapshot(" not in repository_source:
+        errors.append("V2 仓库缺少单查询工作台快照。")
+
+    theme_source = (root / "v2/ui/theme.py").read_text(encoding="utf-8")
+    for marker in (
+        '[data-testid="stFileUploaderDropzone"] button',
+        '[data-testid="stCode"] button',
+        "color-scheme: dark",
+        'ASSET_DIR / "studio-background.webp"',
+    ):
+        if marker not in theme_source:
+            errors.append(f"V2 深色原生控件契约缺少：{marker}")
 
     config_source = (root / "v2/config.py").read_text(encoding="utf-8")
     for key in ("V2_USERNAME", "V2_PASSWORD_HASH", "V2_DATABASE_URL", "V2_OWNER_ID"):

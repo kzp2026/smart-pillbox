@@ -20,6 +20,11 @@ class ContractVerifierTests(unittest.TestCase):
         self.assertIn("v2/ui/errors.py", REQUIRED_PATHS)
         self.assertIn("tests/v2/test_error_messages.py", REQUIRED_PATHS)
 
+    def test_navigation_performance_contract_files_are_required(self) -> None:
+        self.assertIn("v2/application/view_cache.py", REQUIRED_PATHS)
+        self.assertIn("tests/v2/test_view_cache.py", REQUIRED_PATHS)
+        self.assertIn("v2/assets/studio-background.webp", REQUIRED_PATHS)
+
     def test_missing_required_path_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             errors = check_required_paths(Path(temp_dir), ("app.py", "v2/app.py"))

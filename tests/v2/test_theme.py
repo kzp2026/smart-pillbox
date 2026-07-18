@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from v2.ui.theme import asset_data_uri, build_theme_css
+from v2.ui.theme import asset_data_uri, build_theme_css, default_asset_urls
 
 
 class ThemeTests(unittest.TestCase):
@@ -34,6 +34,33 @@ class ThemeTests(unittest.TestCase):
         self.assertIn(":focus-visible", css)
         self.assertIn(".v2-mascot", css)
         self.assertNotIn("linear-gradient", css)
+
+    def test_native_button_like_controls_share_the_dark_console_palette(self) -> None:
+        css = build_theme_css(
+            {
+                "background": "data:image/png;base64,background",
+                "logo": "data:image/png;base64,logo",
+                "mascot": "data:image/png;base64,mascot",
+            }
+        )
+
+        for selector in (
+            '[data-testid="stFileUploaderDropzone"] button',
+            '[data-testid="stLinkButton"] a',
+            '[data-baseweb="input"] button',
+            '[data-testid="stCode"] button',
+            '.stDownloadButton > button',
+        ):
+            self.assertIn(selector, css)
+        self.assertIn("color-scheme: dark", css)
+        self.assertIn("touch-action: manipulation", css)
+        self.assertNotIn("transition: all", css)
+
+    def test_runtime_theme_assets_use_small_webp_payloads(self) -> None:
+        assets = default_asset_urls()
+
+        self.assertTrue(all(value.startswith("data:image/webp;base64,") for value in assets.values()))
+        self.assertLess(sum(len(value) for value in assets.values()), 900_000)
 
 
 if __name__ == "__main__":

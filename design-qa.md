@@ -86,3 +86,33 @@ The reference and final desktop capture were reviewed together in one comparison
 
 - The reference contains populated products and generated images. The QA database is intentionally empty, so the final capture shows empty-state copy instead of fabricated records.
 - After migration, real products, comments, requirements, historical runs, documents and image artifacts occupy the preserved overview and result regions.
+
+---
+
+# V2 Navigation, DashScope Key & Native Control QA — 2026-07-18
+
+**Final result: PASSED**
+
+## Evidence
+
+- Desktop import controls: `docs/qa/v2-import-controls-1440x1000.png`
+- Mobile DashScope key settings: `docs/qa/v2-key-settings-390x844.png`
+- Desktop viewport: 1440 × 1000
+- Mobile viewport: 390 × 844
+- State: authenticated single-user V2 with local private SQLite QA data and no provider key.
+
+## Performance checks
+
+- Navigation progress counts now use one `workspace_snapshot()` connection/query instead of per-table queries.
+- Workspace snapshot, product list, run list and same-run detail are reused for 30 seconds and invalidated after writes or logout.
+- Runtime background, logo and mascot use WebP data URIs totaling 66,699 characters instead of roughly 5 MB of PNG base64 per rerun; source PNGs remain preserved.
+- Warm local Chromium switch from overview to import completed in 832 ms. This is local interaction evidence; Supabase improvement is enforced separately by the single-query and cache tests.
+
+## Visual and security checks
+
+- Upload button computed style: blue `rgb(10, 86, 189)`, light text `rgb(238, 248, 255)`, cyan border `rgb(45, 169, 255)`; no white button remains.
+- Password visibility, download, link, form submit, primary, secondary, disabled, code-copy and dropdown controls share the dark console palette with visible hover/focus treatment.
+- DashScope shortcut is visible in the desktop sidebar. Settings shows only `V2_IMAGE_PROVIDER`, `V2_IMAGE_MODEL` and placeholder `V2_IMAGE_API_KEY`; no DeepSeek key prompt and no current key/password value appears.
+- Desktop document width: client 1440 px / scroll 1440 px. Mobile: client 390 px / scroll 390 px. No page-level horizontal overflow.
+- Fixed assistant is hidden below 560 px so it cannot cover the key action or other mobile controls.
+- Browser console: 0 errors, 0 warnings for the final QA run.
