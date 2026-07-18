@@ -45,6 +45,7 @@ from v2.ui.components import (
     status_bar_html,
     login_intro_html,
 )
+from v2.ui.errors import public_error_message
 from v2.ui.theme import inject_theme
 
 
@@ -337,7 +338,9 @@ def _current_detail(
     try:
         return history.reopen(selected, include_artifact_data=include_data)
     except Exception as exc:
-        st_module.error(f"读取历史结果失败：{exc}")
+        st_module.error(
+            public_error_message("读取历史结果失败", exc, guidance="请刷新后重试。")
+        )
         return None
 
 
@@ -487,7 +490,9 @@ def _render_import(
         dataframe = read_upload_table(uploaded.name, data)
         candidates = candidate_comment_columns(dataframe)
     except Exception as exc:
-        st_module.error(f"文件解析失败：{exc}")
+        st_module.error(
+            public_error_message("文件解析失败", exc, guidance="请确认文件格式正确后重试。")
+        )
         return
     st_module.dataframe(dataframe.head(50), hide_index=True, use_container_width=True)
     if not candidates:
@@ -742,7 +747,9 @@ def _render_artifact(st_module: object, artifact: object) -> None:
 
             st_module.dataframe(pd.read_csv(io.BytesIO(data)), hide_index=True, use_container_width=True)
         except Exception as exc:
-            st_module.warning(f"CSV 预览失败：{exc}")
+            st_module.warning(
+                public_error_message("CSV 预览失败", exc, guidance="仍可下载原文件。")
+            )
     elif name.lower().endswith((".xlsx", ".xls")):
         try:
             import pandas as pd
@@ -755,7 +762,9 @@ def _render_artifact(st_module: object, artifact: object) -> None:
                 pd.read_excel(workbook, sheet_name=sheet), hide_index=True, use_container_width=True
             )
         except Exception as exc:
-            st_module.warning(f"表格预览失败：{exc}")
+            st_module.warning(
+                public_error_message("表格预览失败", exc, guidance="仍可下载原文件。")
+            )
     elif name.lower().endswith((".txt", ".md", ".json", ".cypher")):
         st_module.code(data.decode("utf-8", errors="replace"), language="json" if name.endswith(".json") else None)
     st_module.download_button(
@@ -1032,7 +1041,7 @@ def _render_settings(
             }
             st_module.success(f"连接正常：{counts}")
         except Exception as exc:
-            st_module.error(f"连接检查失败：{exc}")
+            st_module.error(public_error_message("连接检查失败", exc))
 
     st_module.divider()
     st_module.markdown("#### 原站数据复制")
@@ -1047,7 +1056,7 @@ def _render_settings(
             report = service.dry_run()
             st_module.session_state["v2_migration_report"] = report
         except Exception as exc:
-            st_module.error(f"预演失败：{exc}")
+            st_module.error(public_error_message("预演失败", exc))
     apply_confirmed = st_module.checkbox("确认仅复制数据，不更改原站", key="v2_migration_confirm")
     if second.button("2. 开始复制", icon=":material/content_copy:", disabled=not apply_confirmed):
         try:
@@ -1055,7 +1064,7 @@ def _render_settings(
             st_module.session_state["v2_migration_report"] = report
             st_module.success(f"复制完成：新增 {report.migrated_total} 项，跳过 {report.skipped_total} 项。")
         except Exception as exc:
-            st_module.error(f"复制失败：{exc}")
+            st_module.error(public_error_message("复制失败", exc))
     if third.button("3. 哈希校验", icon=":material/verified:"):
         try:
             verification = service.verify()
@@ -1064,7 +1073,7 @@ def _render_settings(
             else:
                 st_module.error("校验未通过：" + "；".join(verification.failed_checks))
         except Exception as exc:
-            st_module.error(f"校验失败：{exc}")
+            st_module.error(public_error_message("校验失败", exc))
     report = st_module.session_state.get("v2_migration_report")
     if report:
         st_module.json(
@@ -1112,7 +1121,7 @@ def main() -> None:
         repository = _repository_for(config)
         store = _store_for(config, repository)
     except Exception as exc:
-        st.error(f"私有服务初始化失败：{exc}")
+        st.error(public_error_message("私有服务初始化失败", exc))
         st.caption("未自动回退到公共数据库或公共存储。")
         return
 

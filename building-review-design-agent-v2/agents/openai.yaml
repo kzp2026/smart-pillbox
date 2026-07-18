@@ -1,0 +1,7 @@
+interface:
+  display_name: "Review Design Agent V2"
+  short_description: "安全创建、扩展并验收私有 Streamlit V2 网页"
+  default_prompt: "Use $building-review-design-agent-v2 to extend the private V2 app without changing the original site or losing existing capabilities."
+
+policy:
+  allow_implicit_invocation: true
