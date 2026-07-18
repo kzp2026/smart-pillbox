@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import html
 import mimetypes
+from functools import lru_cache
 from pathlib import Path
 from typing import Mapping
 
@@ -19,6 +20,7 @@ def asset_data_uri(path: str | Path) -> str:
     return f"data:{mime};base64,{encoded}"
 
 
+@lru_cache(maxsize=1)
 def default_asset_urls() -> dict[str, str]:
     return {
         "background": asset_data_uri(ASSET_DIR / "studio-background.webp"),

@@ -28,7 +28,12 @@ from v2.application.history import HistoryService, RunDetail
 from v2.application.image_generation import ImageGenerationService
 from v2.application.imports import ImportService
 from v2.application.migration import MigrationService
-from v2.application.view_cache import ExpiringViewCache
+from v2.application.runtime_state import (
+    LOGIN_GUARDS as _LOGIN_GUARDS,
+    REPOSITORIES as _REPOSITORIES,
+    STORES as _STORES,
+    VIEW_CACHE as _VIEW_CACHE,
+)
 from v2.auth import LoginGuard, SessionClock
 from v2.config import AppConfig, ConfigError
 from v2.domain.models import ArtifactKind, CreateRunCommand
@@ -62,12 +67,6 @@ STAGE_NAV_ITEMS = (
 )
 NAV_ITEMS = STAGE_NAV_ITEMS + ("历史记录", "设置与迁移")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-
-_LOGIN_GUARDS: dict[str, LoginGuard] = {}
-_REPOSITORIES: dict[tuple[str, str, str], KnowledgeRepository] = {}
-_STORES: dict[tuple[str, ...], object] = {}
-_VIEW_CACHE: ExpiringViewCache[Any] = ExpiringViewCache(ttl_seconds=30)
-
 
 @dataclass(frozen=True)
 class _WorkspaceView:
@@ -144,22 +143,58 @@ def _cached_products(repository: KnowledgeRepository):
     return _cached_view(repository, "products", repository.list_products)
 
 
-def _cached_runs(history: HistoryService, limit: int):
+def _cached_runs(
+    history: HistoryService,
+    limit: int,
+    target_product: str | None = None,
+):
+    product = str(target_product or "").strip()
+
+    def load_runs():
+        if not product:
+            return history.list_runs(limit)
+        try:
+            return history.list_runs(limit, target_product=product)
+        except TypeError:
+            return [run for run in history.list_runs(200) if run.target_product == product][:limit]
+
     return _cached_view(
         history.repository,
         "pipeline-runs",
-        lambda: history.list_runs(limit),
+        load_runs,
         int(limit),
+        product,
     )
 
 
-def _cached_run_detail(history: HistoryService, run_id: str, include_data: bool):
+def _cached_run_detail(
+    history: HistoryService,
+    run_id: str,
+    include_data: bool,
+    data_mime_prefixes: tuple[str, ...] = (),
+):
+    prefixes = tuple(data_mime_prefixes)
+
+    def load_detail():
+        if prefixes:
+            try:
+                return history.reopen(
+                    run_id,
+                    include_artifact_data=include_data,
+                    data_mime_prefixes=prefixes,
+                )
+            except TypeError:
+                # Compatibility with a HistoryService cached from the previous deploy.
+                return history.reopen(run_id, include_artifact_data=include_data)
+        return history.reopen(run_id, include_artifact_data=include_data)
+
     return _cached_view(
         history.repository,
         "run-detail",
-        lambda: history.reopen(run_id, include_artifact_data=include_data),
+        load_detail,
         run_id,
         bool(include_data),
+        prefixes,
     )
 
 
@@ -407,12 +442,30 @@ def _artifact_kind(name: str, mime_type: str) -> ArtifactKind:
     return ArtifactKind.DOCUMENT
 
 
+def _active_product(st_module: object) -> str:
+    return str(st_module.session_state.get("v2_active_product") or "").strip()
+
+
+def _set_active_product(st_module: object, product_name: str) -> str:
+    product = str(product_name or "").strip()
+    previous = _active_product(st_module)
+    st_module.session_state["v2_active_product"] = product
+    if product != previous:
+        st_module.session_state.pop("v2_current_run_id", None)
+        st_module.session_state.pop("v2_loaded_image_run_id", None)
+        st_module.session_state.pop("v2_history_product", None)
+    return product
+
+
 def _current_detail(
     st_module: object,
     history: HistoryService,
     include_data: bool = True,
 ) -> RunDetail | None:
-    runs = _cached_runs(history, 50)
+    product = _active_product(st_module)
+    if not product:
+        return None
+    runs = _cached_runs(history, 50, product)
     if not runs:
         return None
     known_ids = {run.id for run in runs}
@@ -561,7 +614,12 @@ def _render_import(
 ) -> None:
     st_module.markdown("### 导入评论资产")
     st_module.caption("支持 CSV、XLSX、XLS；单文件最大 50 MB。导入会去重，并自动沉淀需求证据。")
-    product_name = st_module.text_input("产品名称", placeholder="例如：智能药盒")
+    product_name = st_module.text_input(
+        "产品名称",
+        placeholder="例如：智能药盒",
+        key="v2_import_product_name",
+    )
+    _set_active_product(st_module, product_name)
     category = st_module.text_input("产品分类", placeholder="例如：适老健康")
     uploaded = st_module.file_uploader("上传评论文件", type=["csv", "xlsx", "xls"])
     if not uploaded:
@@ -605,6 +663,8 @@ def _render_import(
             st_module.session_state["v2_current_run_id"] = run_id
             st_module.session_state["v2_last_input_path"] = input_path
             st_module.session_state["v2_last_product_name"] = product_name
+            _set_active_product(st_module, product_name)
+            st_module.session_state["v2_current_run_id"] = run_id
             st_module.success(
                 f"导入完成：新增 {result.report.inserted_count} 条评论，跳过 "
                 f"{result.report.duplicate_count} 条重复，新增 {result.new_requirement_count} 条需求证据。"
@@ -740,10 +800,14 @@ def _render_demand(
     store: object,
 ) -> None:
     st_module.markdown("### 需求生成与设计任务")
-    products = _cached_products(repository)
-    options = [item.name for item in products]
-    default_product = options[0] if options else ""
-    target_product = st_module.text_input("目标产品", value=default_product)
+    if "v2_target_product" not in st_module.session_state:
+        st_module.session_state["v2_target_product"] = _active_product(st_module)
+    target_product = st_module.text_input(
+        "目标产品",
+        placeholder="填写新产品名称；历史结果会按该产品隔离",
+        key="v2_target_product",
+    )
+    _set_active_product(st_module, target_product)
     demand_text = st_module.text_area(
         "本次设计需求",
         placeholder="例如：强化提醒感知与防潮能力，同时保持适老化易用性。",
@@ -825,6 +889,8 @@ def _render_demand(
                     st_module.success(f"已生成并归档 {report.succeeded_count} 张效果图。")
             else:
                 st_module.success("设计方案与工业设计 Prompt 已生成。")
+            st_module.session_state["v2_current_run_id"] = run.id
+            _set_active_product(st_module, command.target_product)
             st_module.session_state["v2_current_run_id"] = run.id
             _invalidate_view_cache(repository)
             st_module.session_state.pop("v2_generation_preview", None)
@@ -942,12 +1008,32 @@ def _render_images(
     history: HistoryService,
 ) -> None:
     st_module.markdown("### AI 效果图")
-    detail = _current_detail(st_module, history, include_data=True)
+    detail = _current_detail(st_module, history, include_data=False)
     if not detail:
-        st_module.info("暂无效果图。请先创建生成任务。")
+        st_module.info("当前产品暂无效果图。请先创建生成任务，其他产品的历史结果已隐藏。")
         return
     images = [item for item in detail.artifacts if item.mime_type.startswith("image/")]
     if images:
+        loaded_run_id = str(st_module.session_state.get("v2_loaded_image_run_id") or "")
+        if loaded_run_id != detail.run.id:
+            st_module.caption(f"已找到 {len(images)} 张私有效果图；页面已先完成切换，预览按需加载。")
+            if st_module.button(
+                "加载效果图预览",
+                icon=":material/image:",
+                type="primary",
+                use_container_width=True,
+            ):
+                st_module.session_state["v2_loaded_image_run_id"] = detail.run.id
+                st_module.rerun()
+        else:
+            detail = _cached_run_detail(
+                history,
+                detail.run.id,
+                True,
+                data_mime_prefixes=("image/",),
+            )
+            images = [item for item in detail.artifacts if item.mime_type.startswith("image/")]
+    if images and str(st_module.session_state.get("v2_loaded_image_run_id") or "") == detail.run.id:
         columns = st_module.columns(min(4, len(images)))
         for index, artifact in enumerate(images):
             with columns[index % len(columns)]:
@@ -998,6 +1084,8 @@ def _render_images(
             repository, store, ExistingImageProvider(_image_provider_config(config))
         ).generate(run.id, list(generated.package.get("visual_assets") or []), int(count))
         st_module.session_state["v2_current_run_id"] = run.id
+        _set_active_product(st_module, run.target_product)
+        st_module.session_state["v2_current_run_id"] = run.id
         _invalidate_view_cache(repository)
         if report.failures:
             st_module.warning(f"重新生成完成：成功 {report.succeeded_count}/{report.requested_count} 张。")
@@ -1027,9 +1115,27 @@ def _render_history(
     history: HistoryService,
 ) -> None:
     st_module.markdown("### 历史记录")
-    runs = _cached_runs(history, 100)
-    if not runs:
-        st_module.info("暂无历史记录。")
+    all_runs = _cached_runs(history, 200)
+    products = list(dict.fromkeys(run.target_product for run in all_runs if run.target_product))
+    active = _active_product(st_module)
+    if active and active not in products:
+        products.insert(0, active)
+    if active and "v2_history_product" not in st_module.session_state:
+        st_module.session_state["v2_history_product"] = active
+    selected_product = st_module.selectbox(
+        "查看产品",
+        products,
+        index=products.index(active) if active in products else None,
+        key="v2_history_product",
+        placeholder="请选择一个产品；不同产品的历史不会混在一起",
+    ) if products else None
+    if selected_product:
+        active = _set_active_product(st_module, str(selected_product))
+    runs = _cached_runs(history, 100, active) if active else []
+    if not active:
+        st_module.info("尚未选择当前产品，历史记录保持隐藏。")
+    elif not runs:
+        st_module.info("当前产品暂无历史记录，其他产品的记录已隐藏。")
     else:
         options = {run.id: run for run in runs}
         selected_id = st_module.selectbox(
@@ -1101,6 +1207,8 @@ def _render_history(
                     mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
                     stored = store.put(run.id, name, data, mime)
                     repository.record_artifact(run.id, _artifact_kind(name, mime), stored)
+            st_module.session_state["v2_current_run_id"] = run.id
+            _set_active_product(st_module, run.target_product)
             st_module.session_state["v2_current_run_id"] = run.id
             _invalidate_view_cache(repository)
             st_module.success("归档已恢复到独立 V2 历史记录。")

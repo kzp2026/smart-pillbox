@@ -270,16 +270,30 @@ class KnowledgeRepository:
             raise KeyError("未找到该 V2 运行记录。")
         return self._pipeline_from_row(row)
 
-    def list_pipeline_runs(self, limit: int = 50) -> list[PipelineRun]:
+    def list_pipeline_runs(
+        self,
+        limit: int = 50,
+        target_product: str | None = None,
+    ) -> list[PipelineRun]:
         safe_limit = max(1, min(int(limit), 200))
+        product = clean_text(target_product or "")
         with self.connect() as connection:
-            rows = connection.execute(
-                self._sql(
-                    "SELECT * FROM pipeline_runs WHERE owner_id = ? "
-                    "ORDER BY updated_at DESC LIMIT ?"
-                ),
-                (self.owner_id, safe_limit),
-            ).fetchall()
+            if product:
+                rows = connection.execute(
+                    self._sql(
+                        "SELECT * FROM pipeline_runs WHERE owner_id = ? AND target_product = ? "
+                        "ORDER BY updated_at DESC LIMIT ?"
+                    ),
+                    (self.owner_id, product, safe_limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    self._sql(
+                        "SELECT * FROM pipeline_runs WHERE owner_id = ? "
+                        "ORDER BY updated_at DESC LIMIT ?"
+                    ),
+                    (self.owner_id, safe_limit),
+                ).fetchall()
         return [self._pipeline_from_row(row) for row in rows]
 
     def update_pipeline_run(

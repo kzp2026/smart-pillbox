@@ -4,6 +4,7 @@ import ast
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from streamlit.testing.v1 import AppTest
 
@@ -19,10 +20,44 @@ from v2.app import (
 )
 from v2.auth import hash_password
 from v2.config import AppConfig
+from v2.adapters.postgres import KnowledgeRepository
 from v2.domain.models import WorkspaceSnapshot
 
 
 class AppStructureTests(unittest.TestCase):
+    def test_navigation_rerun_reuses_repository_and_workspace_snapshot(self) -> None:
+        initialize_calls: list[str] = []
+        snapshot_calls: list[str] = []
+        original_initialize = KnowledgeRepository.initialize
+        original_snapshot = KnowledgeRepository.workspace_snapshot
+
+        def counting_initialize(repository: KnowledgeRepository) -> None:
+            initialize_calls.append(repository.database_url)
+            original_initialize(repository)
+
+        def counting_snapshot(repository: KnowledgeRepository):
+            snapshot_calls.append(repository.database_url)
+            return original_snapshot(repository)
+
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.object(
+            KnowledgeRepository, "initialize", counting_initialize
+        ), mock.patch.object(KnowledgeRepository, "workspace_snapshot", counting_snapshot):
+            app = self._logged_in_app(Path(temp_dir) / "private.sqlite3")
+            navigation = next(item for item in app.sidebar.radio if item.label == "工作台导航")
+            navigation.set_value("AI 效果图").run()
+
+        self.assertEqual(len(initialize_calls), 1)
+        self.assertEqual(len(snapshot_calls), 1)
+
+    def test_ai_image_page_defers_large_artifact_bytes_until_preview_is_requested(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+        start = source.index("def _render_images(")
+        end = source.index("\ndef _zip_run(", start)
+        render_images_source = source[start:end]
+
+        self.assertIn("include_data=False", render_images_source)
+        self.assertIn("加载效果图预览", render_images_source)
+
     def test_app_bootstrap_avoids_new_domain_type_imports_during_hot_reload(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
         tree = ast.parse(source)

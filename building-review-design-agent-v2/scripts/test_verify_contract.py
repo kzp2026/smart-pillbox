@@ -22,6 +22,7 @@ class ContractVerifierTests(unittest.TestCase):
 
     def test_navigation_performance_contract_files_are_required(self) -> None:
         self.assertIn("v2/application/view_cache.py", REQUIRED_PATHS)
+        self.assertIn("v2/application/runtime_state.py", REQUIRED_PATHS)
         self.assertIn("tests/v2/test_view_cache.py", REQUIRED_PATHS)
         self.assertIn("v2/assets/studio-background.webp", REQUIRED_PATHS)
 

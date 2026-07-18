@@ -24,7 +24,8 @@ Use this Skill to create, extend, repair, verify, or deploy the private V2 witho
 - Treat migration as an explicit, idempotent copy: dry-run, confirm, apply, count, and hash-check. Never mutate the source.
 - Put credentials only in server-side Secrets. Mask configuration status and sanitize errors.
 - Keep the sidebar shortcut for the DashScope image key, but render only a placeholder template that directs the owner to Streamlit Secrets; never accept or persist the key in a page field.
-- Keep page switching fast: load the workspace progress counters in one query, reuse read-only view data for 30 seconds, invalidate the private scope immediately after every write, and serve the visual shell from the optimized WebP runtime assets instead of re-sending multi-megabyte PNG data URIs.
+- Keep page switching within the 5-second interaction budget: retain repositories, stores and the 30-second view cache in an imported runtime module that survives Streamlit reruns; initialize the database only once per process; cache encoded WebP shell assets; defer large effect-image bytes until the owner requests previews; batch private blob reads; and invalidate the private scope immediately after every write.
+- Keep design results and history scoped to the active product. Starting or naming a new product must clear the previous selected run, and history must hide other products unless the owner deliberately selects one of them.
 - Keep the Streamlit root bootstrap compatible with modules cached from the immediately previous deployment: do not directly import newly added view-only domain types in `v2/app.py`; use a structural local fallback so a mixed-module hot reload degrades counters instead of crashing the app.
 - Require explicit confirmation for deletion, migration writes, archive restore, and paid image generation.
 

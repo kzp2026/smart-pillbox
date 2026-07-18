@@ -24,6 +24,7 @@ REQUIRED_PATHS = (
     "v2/auth.py",
     "v2/config.py",
     "v2/application/view_cache.py",
+    "v2/application/runtime_state.py",
     "v2/assets/studio-background.webp",
     "v2/assets/ai-brand-mark.webp",
     "v2/assets/assistant-mascot.webp",
@@ -139,13 +140,24 @@ def verify_static(root: Path) -> list[str]:
     if "class _WorkspaceView" not in app_source:
         errors.append("V2 入口缺少旧模块热更新时使用的工作台零值回退。")
     for marker in (
-        "ExpiringViewCache(ttl_seconds=30)",
         "workspace_snapshot",
         "配置百炼效果图 Key",
         "V2_IMAGE_API_KEY",
+        "加载效果图预览",
+        "v2_active_product",
     ):
         if marker not in app_source:
             errors.append(f"V2 导航性能或百炼 Key 入口契约缺少：{marker}")
+
+    runtime_source = (root / "v2/application/runtime_state.py").read_text(encoding="utf-8")
+    for marker in ("ExpiringViewCache(ttl_seconds=30)", "REPOSITORIES", "STORES", "VIEW_CACHE"):
+        if marker not in runtime_source:
+            errors.append(f"V2 跨重跑运行时状态契约缺少：{marker}")
+
+    history_source = (root / "v2/application/history.py").read_text(encoding="utf-8")
+    for marker in ("target_product", "data_mime_prefixes", "read_many"):
+        if marker not in history_source:
+            errors.append(f"V2 产品历史隔离或按需资产加载契约缺少：{marker}")
 
     repository_source = (root / "v2/adapters/postgres.py").read_text(encoding="utf-8")
     if "def workspace_snapshot(" not in repository_source:

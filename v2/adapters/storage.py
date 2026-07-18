@@ -36,6 +36,8 @@ class ArtifactStore(Protocol):
 
     def read(self, path: str) -> bytes: ...
 
+    def read_many(self, paths: Iterable[str]) -> dict[str, bytes]: ...
+
     def delete_many(self, paths: Iterable[str]) -> DeleteReport: ...
 
 
@@ -80,6 +82,9 @@ class LocalArtifactStore:
 
     def read(self, path: str) -> bytes:
         return self._resolve(path).read_bytes()
+
+    def read_many(self, paths: Iterable[str]) -> dict[str, bytes]:
+        return {path: self.read(path) for path in dict.fromkeys(paths)}
 
     def delete_many(self, paths: Iterable[str]) -> DeleteReport:
         deleted: list[str] = []
@@ -160,6 +165,23 @@ class RepositoryArtifactStore:
             raise FileNotFoundError(path)
         return bytes(row["data"])
 
+    def read_many(self, paths: Iterable[str]) -> dict[str, bytes]:
+        candidates = tuple(dict.fromkeys(str(path) for path in paths))
+        if not candidates:
+            return {}
+        for path in candidates:
+            self._validate_path(path)
+        placeholders = ", ".join("?" for _ in candidates)
+        with self.repository.connect() as connection:
+            rows = connection.execute(
+                self.repository._sql(
+                    "SELECT storage_path, data FROM artifact_blobs "
+                    f"WHERE owner_id = ? AND storage_path IN ({placeholders})"
+                ),
+                (self.repository.owner_id, *candidates),
+            ).fetchall()
+        return {str(row["storage_path"]): bytes(row["data"]) for row in rows}
+
     def delete_many(self, paths: Iterable[str]) -> DeleteReport:
         deleted: list[str] = []
         failed: list[str] = []
@@ -220,6 +242,9 @@ class SupabaseArtifactStore:
         )
         with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
             return response.read()
+
+    def read_many(self, paths: Iterable[str]) -> dict[str, bytes]:
+        return {path: self.read(path) for path in dict.fromkeys(paths)}
 
     def delete_many(self, paths: Iterable[str]) -> DeleteReport:
         candidates = tuple(paths)

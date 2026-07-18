@@ -8,6 +8,9 @@ from v2.ui.theme import asset_data_uri, build_theme_css, default_asset_urls
 
 
 class ThemeTests(unittest.TestCase):
+    def test_runtime_theme_assets_are_encoded_once_per_process(self) -> None:
+        self.assertTrue(hasattr(default_asset_urls, "cache_info"))
+
     def test_asset_data_uri_embeds_real_png_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             image = Path(temp_dir) / "asset.png"

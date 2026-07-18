@@ -35,14 +35,47 @@ class HistoryService:
         self.repository = repository
         self.store = store
 
-    def list_runs(self, limit: int = 50) -> list[PipelineRun]:
-        return self.repository.list_pipeline_runs(limit)
+    def list_runs(
+        self,
+        limit: int = 50,
+        target_product: str | None = None,
+    ) -> list[PipelineRun]:
+        try:
+            return self.repository.list_pipeline_runs(limit, target_product=target_product)
+        except TypeError as exc:
+            if "target_product" not in str(exc):
+                raise
+            legacy_limit = 200 if target_product else limit
+            runs = self.repository.list_pipeline_runs(legacy_limit)
+            if not target_product:
+                return runs[:limit]
+            return [run for run in runs if run.target_product == target_product][:limit]
 
-    def reopen(self, run_id: str, include_artifact_data: bool = False) -> RunDetail:
+    def reopen(
+        self,
+        run_id: str,
+        include_artifact_data: bool = False,
+        data_mime_prefixes: tuple[str, ...] = (),
+    ) -> RunDetail:
         run = self.repository.get_pipeline_run(run_id)
         generation = self.repository.get_generation_run(run_id) or {}
+        rows = self.repository.list_artifacts_for_run(run_id)
+        requested_paths = [
+            str(row["storage_path"])
+            for row in rows
+            if include_artifact_data
+            and (
+                not data_mime_prefixes
+                or any(str(row["mime_type"]).startswith(prefix) for prefix in data_mime_prefixes)
+            )
+        ]
+        read_many = getattr(self.store, "read_many", None)
+        if callable(read_many):
+            artifact_data = read_many(requested_paths)
+        else:
+            artifact_data = {path: self.store.read(path) for path in requested_paths}
         artifacts = []
-        for row in self.repository.list_artifacts_for_run(run_id):
+        for row in rows:
             path = str(row["storage_path"])
             artifacts.append(
                 HistoryArtifact(
@@ -53,7 +86,7 @@ class HistoryService:
                     mime_type=str(row["mime_type"]),
                     size_bytes=int(row["size_bytes"]),
                     sha256=str(row["sha256"]),
-                    data=self.store.read(path) if include_artifact_data else None,
+                    data=artifact_data.get(path),
                 )
             )
         return RunDetail(
