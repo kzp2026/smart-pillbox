@@ -50,6 +50,7 @@ streamlit run app.py --global.developmentMode=false --server.headless=true
 | 文本/图片 provider | 无 Key、超时、有限重试、脱敏、离线标识、付费二次确认、幂等锁 |
 | 导航/功能 | 9 个页面无异常、10 个旧阶段恰好映射一次、结果与效果图入口仍在 |
 | 切页性能 | 工作台计数单连接/单查询；30 秒内快照、产品、运行与详情不重复加载；写入和退出后缓存失效；3 项运行时 WebP data URI 合计 < 900 KB |
+| Streamlit 热更新 | `v2/app.py` 不直接导入新增的 `WorkspaceSnapshot`；模拟上一版本缓存仓库缺少 `workspace_snapshot()` 时返回健康失败的零值快照而不崩溃 |
 | 百炼 Key 入口 | 侧栏直达、仅 `V2_IMAGE_API_KEY` 占位模板、当前 Key/DeepSeek Key 不回显、跳转 Streamlit 应用管理 |
 | UI/CSS/资产 | Chromium 1440×1000、390×844、无横向溢出/遮挡、上传/下载/密码切换/代码复制无白底、手机助手不遮挡、hover/disabled/focus 可辨、控制台无错误 |
 | 部署 | 新入口 `v2/app.py`、独立 Secrets、新网址、原网址与 Secrets 未变 |

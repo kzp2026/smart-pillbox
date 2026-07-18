@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,18 @@ from v2.domain.models import WorkspaceSnapshot
 
 
 class AppStructureTests(unittest.TestCase):
+    def test_app_bootstrap_avoids_new_domain_type_imports_during_hot_reload(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported_names = {
+            alias.name
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom) and node.module == "v2.domain.models"
+            for alias in node.names
+        }
+
+        self.assertNotIn("WorkspaceSnapshot", imported_names)
+
     def _logged_in_app(self, database: Path) -> AppTest:
         app = AppTest.from_file(
             str(Path(__file__).resolve().parents[2] / "v2" / "app.py"),
@@ -173,6 +186,20 @@ class AppStructureTests(unittest.TestCase):
 
         _invalidate_view_cache(repository)  # type: ignore[arg-type]
         self.assertEqual(_workspace_snapshot(repository).product_count, 2)  # type: ignore[arg-type]
+
+    def test_workspace_snapshot_falls_back_for_a_repository_cached_before_deploy(self) -> None:
+        class CachedLegacyRepository:
+            database_url = "sqlite:///stale-module.sqlite3"
+            owner_id = "private-owner"
+            schema = "agent_v2"
+
+        repository = CachedLegacyRepository()
+        _invalidate_view_cache(repository)  # type: ignore[arg-type]
+
+        snapshot = _workspace_snapshot(repository)  # type: ignore[arg-type]
+
+        self.assertFalse(snapshot.healthy)
+        self.assertEqual(snapshot.product_count, 0)
 
 
 if __name__ == "__main__":

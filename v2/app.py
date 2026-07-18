@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -30,7 +31,7 @@ from v2.application.migration import MigrationService
 from v2.application.view_cache import ExpiringViewCache
 from v2.auth import LoginGuard, SessionClock
 from v2.config import AppConfig, ConfigError
-from v2.domain.models import ArtifactKind, CreateRunCommand, WorkspaceSnapshot
+from v2.domain.models import ArtifactKind, CreateRunCommand
 from v2.pipeline.catalog import LEGACY_STAGES
 from v2.pipeline.runner import PipelineRunner, SubprocessStageExecutor
 from v2.providers.images import ExistingImageProvider
@@ -66,6 +67,19 @@ _LOGIN_GUARDS: dict[str, LoginGuard] = {}
 _REPOSITORIES: dict[tuple[str, str, str], KnowledgeRepository] = {}
 _STORES: dict[tuple[str, ...], object] = {}
 _VIEW_CACHE: ExpiringViewCache[Any] = ExpiringViewCache(ttl_seconds=30)
+
+
+@dataclass(frozen=True)
+class _WorkspaceView:
+    """Structural fallback that survives mixed-module Streamlit hot reloads."""
+
+    product_count: int = 0
+    comment_count: int = 0
+    requirement_count: int = 0
+    generation_run_count: int = 0
+    artifact_count: int = 0
+    image_count: int = 0
+    healthy: bool = True
 
 
 def masked_service_summary(config: AppConfig) -> dict[str, str]:
@@ -116,12 +130,12 @@ def _invalidate_view_cache(repository: KnowledgeRepository | None = None) -> Non
         _VIEW_CACHE.invalidate((_repository_scope(repository),))
 
 
-def _workspace_snapshot(repository: KnowledgeRepository) -> WorkspaceSnapshot:
-    def load() -> WorkspaceSnapshot:
+def _workspace_snapshot(repository: KnowledgeRepository) -> Any:
+    def load() -> Any:
         try:
             return repository.workspace_snapshot()
         except Exception:
-            return WorkspaceSnapshot(healthy=False)
+            return _WorkspaceView(healthy=False)
 
     return _cached_view(repository, "workspace-snapshot", load)
 
@@ -336,7 +350,7 @@ def _render_mobile_navigation(st_module: object) -> str:
     return str(navigation)
 
 
-def _completed_steps(snapshot: WorkspaceSnapshot) -> set[int]:
+def _completed_steps(snapshot: Any) -> set[int]:
     completed: set[int] = set()
     if snapshot.comment_count:
         completed.add(0)
@@ -354,7 +368,7 @@ def _completed_steps(snapshot: WorkspaceSnapshot) -> set[int]:
 def _render_header(
     st_module: object,
     config: AppConfig,
-    snapshot: WorkspaceSnapshot,
+    snapshot: Any,
     navigation: str,
 ) -> None:
     summary = masked_service_summary(config)
@@ -419,7 +433,7 @@ def _render_overview(
     st_module: object,
     repository: KnowledgeRepository,
     history: HistoryService,
-    snapshot: WorkspaceSnapshot,
+    snapshot: Any,
 ) -> None:
     products = _cached_products(repository)
     runs = _cached_runs(history, 8)

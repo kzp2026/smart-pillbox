@@ -25,6 +25,7 @@ Use this Skill to create, extend, repair, verify, or deploy the private V2 witho
 - Put credentials only in server-side Secrets. Mask configuration status and sanitize errors.
 - Keep the sidebar shortcut for the DashScope image key, but render only a placeholder template that directs the owner to Streamlit Secrets; never accept or persist the key in a page field.
 - Keep page switching fast: load the workspace progress counters in one query, reuse read-only view data for 30 seconds, invalidate the private scope immediately after every write, and serve the visual shell from the optimized WebP runtime assets instead of re-sending multi-megabyte PNG data URIs.
+- Keep the Streamlit root bootstrap compatible with modules cached from the immediately previous deployment: do not directly import newly added view-only domain types in `v2/app.py`; use a structural local fallback so a mixed-module hot reload degrades counters instead of crashing the app.
 - Require explicit confirmation for deletion, migration writes, archive restore, and paid image generation.
 
 ## Execution Workflow

@@ -127,6 +127,17 @@ def verify_static(root: Path) -> list[str]:
     app_source = (root / "v2/app.py").read_text(encoding="utf-8")
     if count_top_level_tuple_items(app_source, "STAGE_NAV_ITEMS") != 7:
         errors.append("V2 页面阶段导航数量不再是 7。")
+    app_tree = ast.parse(app_source)
+    direct_domain_imports = {
+        alias.name
+        for node in app_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == "v2.domain.models"
+        for alias in node.names
+    }
+    if "WorkspaceSnapshot" in direct_domain_imports:
+        errors.append("V2 入口直接导入 WorkspaceSnapshot，会在 Streamlit 混合模块热更新时崩溃。")
+    if "class _WorkspaceView" not in app_source:
+        errors.append("V2 入口缺少旧模块热更新时使用的工作台零值回退。")
     for marker in (
         "ExpiringViewCache(ttl_seconds=30)",
         "workspace_snapshot",
