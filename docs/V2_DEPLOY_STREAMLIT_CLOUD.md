@@ -12,6 +12,13 @@
 3. 复制 `.streamlit/secrets.v2.example.toml` 的字段到新应用 Secrets，并替换占位值。
 4. 不修改原应用的入口、Secrets 或网址。
 
+### PostgreSQL 连接地址
+
+- V2 与原站使用同一个 Supabase 项目时，优先把原应用中已经验证可用的 `PRODUCT_KB_DATABASE_URL` 或 `DATABASE_URL` 的值复制为新应用的 `V2_DATABASE_URL`；数据隔离由 `V2_SCHEMA = "agent_v2"` 保证。
+- 使用 Supabase Shared Transaction Pooler 时，必须从项目顶部 **Connect** 面板完整复制 URI。用户名形如 `postgres.<project-ref>`，端口为 `6543`，密码是 Supabase 数据库密码，不是 V2 登录密码。
+- 不要因为单个新应用连接失败就重置数据库密码。确需重置时，必须同步更新所有使用该数据库的应用，否则原站会失去连接。
+- 保存 Secrets 后等待应用重启，再登录并核对“数据库：PostgreSQL 私有 schema”、产品数、评论数和需求证据数。认证失败时页面只能显示脱敏提示，不得回显连接异常原文。
+
 ## 新建应用
 
 在 Streamlit Community Cloud 中选择同一仓库和同一分支，创建第二个应用：

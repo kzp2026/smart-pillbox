@@ -53,6 +53,8 @@
 
 先运行受影响测试，再运行 Skill 契约校验、全部 V2 测试和仓库全量测试。启动 V2 与原站冒烟时必须带 `--global.developmentMode=false`。发布新 Streamlit 应用时只配置 V2 Secrets，不修改原应用入口、Secrets 或网址。
 
+同一 Supabase 项目部署第二个 Streamlit 应用时，优先把原应用中已验证可用的 `PRODUCT_KB_DATABASE_URL` / `DATABASE_URL` 值复制为 `V2_DATABASE_URL`，并依靠 `V2_SCHEMA = "agent_v2"` 隔离数据。若改用 Shared Transaction Pooler，连接串必须从 Supabase **Connect** 面板完整复制，用户名形如 `postgres.<project-ref>`、端口为 `6543`，使用数据库密码而不是 V2 登录密码。不得为修复单个新应用而直接重置数据库密码；确需重置时必须同步更新所有关联应用。
+
 生产迁移前先确认登录、数据库、Storage、导航和零付费生成路径。迁移后核对计数与哈希，再验证历史打开、下载、安全恢复和受控付费确认。最后重新访问原网址。
 
 ## 10. 后续新增功能时同步 Skill
