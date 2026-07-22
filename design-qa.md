@@ -127,3 +127,23 @@ The reference and final desktop capture were reviewed together in one comparison
 - Desktop document width: client 1440 px / scroll 1440 px. Mobile: client 390 px / scroll 390 px. No page-level horizontal overflow.
 - Fixed assistant is hidden below 560 px so it cannot cover the key action or other mobile controls.
 - Browser console: 0 errors, 0 warnings for the final QA run.
+
+---
+
+# V2 Expander Header Dark Theme QA — 2026-07-22
+
+**Deployment result: PASSED**
+
+## Evidence
+
+- Pre-fix production screenshot: `C:/Users/15854/AppData/Local/Temp/codex-clipboard-1faf7350-1603-41ac-b109-fd077845e97d.png`
+- Affected control: Streamlit expander header, including the expanded “工业设计约束” panel.
+- Production URL returned HTTP 200 after the update: `https://smart-pillbox-ri94raugwzuqchyjdh4tcu.streamlit.app/`
+
+## Checks
+
+- Expander summary now has an explicit dark `#081a38` background and light theme text.
+- Hover uses `#0a2a54`; the open state keeps the same dark palette and gains a themed divider.
+- Nested label text and disclosure icons inherit the dark-theme foreground color.
+- The regression test covers default, hover and icon selectors so future Streamlit theme changes cannot silently restore a white header.
+- Theme tests: 7 passed. Repository full suite: 169 passed. Original-site freeze: passed.
