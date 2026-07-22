@@ -47,11 +47,11 @@
 
 Streamlit 任何控件交互都会重跑脚本，不能在全局页头逐表查询。把工作台计数合并为一条 `workspace_snapshot()` 聚合查询，产品、运行与同一运行详情经过 30 秒只读缓存复用；所有写入成功或失败后，只要持久状态可能变化就立即按仓库作用域失效，退出时清空。运行时背景、Logo 和助手使用优化 WebP，原 PNG 仅保留为视觉源；三项 data URI 合计小于 900 KB。
 
-入口脚本的普通全局变量不会跨 Streamlit 重跑保留。仓库、Storage、登录守卫和视图缓存统一放在 `v2/application/runtime_state.py`；主题模块用进程缓存只编码一次 WebP。AI 效果图页先用 `include_data=False` 打开元数据并完成页面切换，预览按钮触发后仅批量读取 `image/` 资产；PostgreSQL blob 读取必须使用一个连接和一条 `IN (...)` 查询。桌面与移动导航的验收预算均为 5 秒以内，大图预览加载时间单独计算并明确显示。
+入口脚本的普通全局变量不会跨 Streamlit 重跑保留。仓库、Storage、登录守卫和视图缓存统一放在 `v2/application/runtime_state.py`；主题模块用进程缓存只编码一次 WebP。AI 效果图页必须先用当前产品运行列表打开轻量骨架，不在切页时 reopen 历史详情或读取大图；预览按钮触发后才批量读取 `image/` 资产；PostgreSQL blob 读取必须使用一个连接和一条 `IN (...)` 查询。桌面与移动导航的验收预算均为 5 秒以内，大图预览加载时间单独计算并明确显示。
 
-会话使用 `v2_active_product` 隔离产品上下文。导入或需求页填写新产品时清除上一运行选择；结果页通过 `target_product` 过滤运行，历史页先选择产品再列出该产品记录。不得删除或覆盖其他产品历史，只做默认隐藏。
+会话使用 `v2_active_product` 隔离产品上下文。导入或需求页填写新产品时清除上一运行选择；页头固定展示当前产品、当前页面和百炼 Key 状态；结果页通过 `target_product` 过滤运行，历史页先选择产品再列出该产品记录，并明确提示“当前仅显示该产品历史，其他产品默认隐藏”。不得删除或覆盖其他产品历史，只做默认隐藏。
 
-阿里云百炼效果图 Key 的可见入口固定在侧栏，点击后进入“设置与迁移”的“百炼效果图 Key 配置”。页面只展示 `V2_IMAGE_PROVIDER`、`V2_IMAGE_MODEL`、`V2_IMAGE_API_KEY` 占位模板和 Streamlit 应用管理链接；Key 仍只写入新应用 Secrets，不进入页面表单、session、数据库、日志或 Git。DeepSeek 已配置时不重复要求填写。
+阿里云百炼效果图 Key 的可见入口固定在侧栏，未配置时使用主按钮样式，并提示 DeepSeek 已独立配置、这里只处理百炼效果图 Key；点击后进入“设置与迁移”的“百炼效果图 Key 配置”。页面只展示 `V2_IMAGE_PROVIDER`、`V2_IMAGE_MODEL`、`V2_IMAGE_API_KEY` 占位模板和 Streamlit 应用管理链接；Key 仍只写入新应用 Secrets，不进入页面表单、session、数据库、日志或 Git。DeepSeek 已配置时不重复要求填写。
 
 ## 9. 深色控制台视觉实现
 

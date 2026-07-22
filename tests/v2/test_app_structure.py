@@ -55,8 +55,10 @@ class AppStructureTests(unittest.TestCase):
         end = source.index("\ndef _zip_run(", start)
         render_images_source = source[start:end]
 
-        self.assertIn("include_data=False", render_images_source)
+        self.assertNotIn("_current_detail(st_module, history, include_data=False)", render_images_source)
+        self.assertIn("页面切换不自动读取大图", render_images_source)
         self.assertIn("加载效果图预览", render_images_source)
+        self.assertIn('data_mime_prefixes=("image/",)', render_images_source)
 
     def test_app_bootstrap_avoids_new_domain_type_imports_during_hot_reload(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
@@ -158,6 +160,20 @@ class AppStructureTests(unittest.TestCase):
 
             self.assertEqual([], list(app.exception))
             self.assertTrue(any("百炼效果图 Key 配置" in item.value for item in app.markdown))
+            self.assertTrue(any("这里只处理阿里云百炼效果图 Key" in item.value for item in app.sidebar.caption))
+
+    def test_header_exposes_current_product_context(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn("current_product_context_html", source)
+        self.assertIn("product_name=_active_product(st_module)", source)
+        self.assertIn("image_key_configured=bool(config.image_api_key)", source)
+
+    def test_history_explicitly_scopes_records_to_current_product(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn("当前仅显示", source)
+        self.assertIn("其他产品默认隐藏", source)
 
     def test_secret_template_uses_placeholders_instead_of_current_keys(self) -> None:
         config = AppConfig.from_mapping(

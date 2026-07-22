@@ -53,6 +53,21 @@ def status_bar_html(
 """
 
 
+def current_product_context_html(
+    *, product_name: str, stage_name: str, image_key_configured: bool
+) -> str:
+    product = product_name.strip() or "未选择"
+    key_state = "百炼 Key 已配置" if image_key_configured else "百炼 Key 未配置"
+    key_class = "" if image_key_configured else " warn"
+    return f"""
+<section class="v2-current-context" aria-label="当前产品上下文">
+  <span>当前产品：<b>{_escape(product)}</b></span>
+  <span>当前页面：<b>{_escape(stage_name)}</b></span>
+  <span class="v2-current-key{key_class}">{_escape(key_state)}</span>
+</section>
+"""
+
+
 def process_bar_html(
     *, active_index: int, completed_indices: Iterable[int] = ()
 ) -> str:

@@ -44,6 +44,7 @@ from v2.providers.text import DeepSeekTextProvider
 from v2.ui.components import (
     action_grid_html,
     brand_html,
+    current_product_context_html,
     mascot_html,
     metric_grid_html,
     panel_open_html,
@@ -345,9 +346,11 @@ def _render_sidebar(st_module: object, config: AppConfig) -> str:
         st_module.markdown("#### 服务状态")
         for name, state in summary.items():
             st_module.caption(f"{name} · {state}")
+        st_module.caption("DeepSeek 已独立配置；这里只处理阿里云百炼效果图 Key。")
         st_module.button(
             "配置百炼效果图 Key",
             icon=":material/key:",
+            type="primary" if not config.image_api_key else "secondary",
             use_container_width=True,
             on_click=_open_key_settings,
             args=(st_module,),
@@ -413,6 +416,14 @@ def _render_header(
             text_model=config.deepseek_model if config.deepseek_api_key else "离线规则",
             image_model=config.image_model,
             healthy=snapshot.healthy,
+        ),
+        unsafe_allow_html=True,
+    )
+    st_module.markdown(
+        current_product_context_html(
+            product_name=_active_product(st_module),
+            stage_name=navigation,
+            image_key_configured=bool(config.image_api_key),
         ),
         unsafe_allow_html=True,
     )
@@ -1008,32 +1019,46 @@ def _render_images(
     history: HistoryService,
 ) -> None:
     st_module.markdown("### AI 效果图")
-    detail = _current_detail(st_module, history, include_data=False)
-    if not detail:
-        st_module.info("当前产品暂无效果图。请先创建生成任务，其他产品的历史结果已隐藏。")
+    active = _active_product(st_module)
+    if not active:
+        st_module.info("尚未选择当前产品。请先在“导入评论资产”或“需求生成”里选择产品。")
         return
-    images = [item for item in detail.artifacts if item.mime_type.startswith("image/")]
+    runs = _cached_runs(history, 20, active)
+    if not runs:
+        st_module.info(f"当前产品“{active}”暂无效果图运行记录，其他产品的历史结果已隐藏。")
+        return
+    known_ids = {run.id for run in runs}
+    selected = str(st_module.session_state.get("v2_current_run_id") or "")
+    if selected not in known_ids:
+        selected = runs[0].id
+        st_module.session_state["v2_current_run_id"] = selected
+    run = next(item for item in runs if item.id == selected)
+    st_module.caption(
+        f"当前产品：{run.target_product} · 最近运行：{run.status.value} · "
+        f"计划图片 {run.image_count} 张。页面切换不自动读取大图。"
+    )
+    loaded_run_id = str(st_module.session_state.get("v2_loaded_image_run_id") or "")
+    detail: RunDetail | None = None
+    images = []
+    if loaded_run_id != run.id:
+        st_module.info("效果图页面已先打开。点击下方按钮后，才会读取图片文件并显示预览。")
+        if st_module.button(
+            "加载效果图预览",
+            icon=":material/image:",
+            type="primary",
+            use_container_width=True,
+        ):
+            st_module.session_state["v2_loaded_image_run_id"] = run.id
+            st_module.rerun()
+    else:
+        detail = _cached_run_detail(
+            history,
+            run.id,
+            True,
+            data_mime_prefixes=("image/",),
+        )
+        images = [item for item in detail.artifacts if item.mime_type.startswith("image/")]
     if images:
-        loaded_run_id = str(st_module.session_state.get("v2_loaded_image_run_id") or "")
-        if loaded_run_id != detail.run.id:
-            st_module.caption(f"已找到 {len(images)} 张私有效果图；页面已先完成切换，预览按需加载。")
-            if st_module.button(
-                "加载效果图预览",
-                icon=":material/image:",
-                type="primary",
-                use_container_width=True,
-            ):
-                st_module.session_state["v2_loaded_image_run_id"] = detail.run.id
-                st_module.rerun()
-        else:
-            detail = _cached_run_detail(
-                history,
-                detail.run.id,
-                True,
-                data_mime_prefixes=("image/",),
-            )
-            images = [item for item in detail.artifacts if item.mime_type.startswith("image/")]
-    if images and str(st_module.session_state.get("v2_loaded_image_run_id") or "") == detail.run.id:
         columns = st_module.columns(min(4, len(images)))
         for index, artifact in enumerate(images):
             with columns[index % len(columns)]:
@@ -1047,7 +1072,7 @@ def _render_images(
                     icon=":material/download:",
                     use_container_width=True,
                 )
-    else:
+    elif loaded_run_id == run.id:
         st_module.info("该任务尚无图片文件；设计方案和 Prompt 仍可正常使用。")
 
     st_module.divider()
@@ -1056,7 +1081,7 @@ def _render_images(
         st_module.caption("配置图像服务后，可基于同一证据与结构约束重新生成。")
         return
     count = st_module.number_input(
-        "重新生成数量", min_value=1, max_value=8, value=min(8, max(1, detail.run.image_count or 8)), key="v2_regen_count"
+        "重新生成数量", min_value=1, max_value=8, value=min(8, max(1, run.image_count or 8)), key="v2_regen_count"
     )
     confirmed = st_module.checkbox(
         f"确认使用 {config.image_provider} / {config.image_model} 重新生成 {int(count)} 张，并可能产生费用。",
@@ -1067,9 +1092,11 @@ def _render_images(
         icon=":material/refresh:",
         disabled=not confirmed,
     ):
+        if detail is None:
+            detail = _cached_run_detail(history, run.id, False)
         command = GenerationCommand(
-            detail.run.target_product,
-            detail.run.demand_text,
+            run.target_product,
+            run.demand_text,
             config.image_provider,
             config.image_model,
             int(count),
@@ -1135,8 +1162,10 @@ def _render_history(
     if not active:
         st_module.info("尚未选择当前产品，历史记录保持隐藏。")
     elif not runs:
+        st_module.caption(f"当前仅显示：{active} 的历史记录；其他产品默认隐藏，可在上方切换查看。")
         st_module.info("当前产品暂无历史记录，其他产品的记录已隐藏。")
     else:
+        st_module.caption(f"当前仅显示：{active} 的历史记录；其他产品默认隐藏，可在上方切换查看。")
         options = {run.id: run for run in runs}
         selected_id = st_module.selectbox(
             "选择运行记录",

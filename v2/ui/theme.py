@@ -205,6 +205,38 @@ h1 {{
 .v2-status-dot.amber {{ background: var(--v2-amber); box-shadow: 0 0 11px rgba(244, 163, 64, 0.76); }}
 .v2-status-dot.off {{ background: var(--v2-danger); box-shadow: 0 0 11px rgba(255, 107, 129, 0.72); }}
 
+.v2-current-context {{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  margin: -4px 0 12px;
+  color: #cfe1f8;
+  background: rgba(5, 19, 43, 0.88);
+  border: 1px solid rgba(67, 139, 229, 0.26);
+  border-radius: 11px;
+}}
+.v2-current-context span {{
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 3px 9px;
+  background: rgba(8, 28, 61, 0.76);
+  border: 1px solid rgba(86, 137, 211, 0.2);
+  border-radius: 999px;
+  font-size: 0.75rem;
+}}
+.v2-current-context b {{ color: #ffffff; }}
+.v2-current-key {{
+  color: #cffff0;
+  border-color: rgba(49, 217, 139, 0.32) !important;
+}}
+.v2-current-key.warn {{
+  color: #ffd8a6;
+  border-color: rgba(244, 163, 64, 0.45) !important;
+}}
+
 .v2-process {{
   display: grid;
   grid-template-columns: repeat(7, minmax(90px, 1fr));
