@@ -75,6 +75,22 @@ class ThemeTests(unittest.TestCase):
         self.assertIn("touch-action: manipulation", css)
         self.assertNotIn("transition: all", css)
 
+    def test_expander_headers_never_fall_back_to_streamlit_white(self) -> None:
+        css = build_theme_css(
+            {
+                "background": "data:image/png;base64,background",
+                "logo": "data:image/png;base64,logo",
+            }
+        )
+
+        for selector in (
+            '[data-testid="stExpander"] details > summary',
+            '[data-testid="stExpander"] details > summary:hover',
+            '[data-testid="stExpander"] details > summary svg',
+        ):
+            self.assertIn(selector, css)
+        self.assertIn("background: #081a38 !important", css)
+
     def test_runtime_theme_assets_use_small_webp_payloads(self) -> None:
         assets = default_asset_urls()
 
