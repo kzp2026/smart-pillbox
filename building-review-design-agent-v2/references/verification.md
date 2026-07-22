@@ -56,7 +56,7 @@ streamlit run app.py --global.developmentMode=false --server.headless=true
 | 百炼 Key 入口 | 侧栏醒目直达并说明只处理百炼效果图 Key、仅 `V2_IMAGE_API_KEY` 占位模板、当前 Key/DeepSeek Key 不回显、跳转 Streamlit 应用管理 |
 | 付费生成 | 默认 1 张、0 张不调用图片服务、显式费用确认、逐图进度、部分成功持久化、失败可追溯 |
 | 初始化恢复 | 错误脱敏、不回退公共库、连接检查项、重试按钮和 Streamlit 应用管理入口可用 |
-| UI/CSS/资产 | Chromium 1440×1000、390×844、无横向溢出/遮挡、无自定义机器人、应用 DOM 内无 Streamlit Viewer/状态/部署/页脚浮标、上传/下载/密码切换/代码复制无白底、hover/disabled/focus 可辨、控制台无错误 |
+| UI/CSS/资产 | Chromium 1440×1000、390×844、无横向溢出/遮挡、无自定义机器人、应用 DOM 内无 Streamlit Viewer/状态/部署/页脚浮标、上传/下载/折叠面板标题/密码切换/代码复制无白底、hover/disabled/focus 可辨、控制台无错误 |
 | 部署 | 新入口 `v2/app.py`、独立 Secrets、新网址、原网址与 Secrets 未变 |
 
 ## 数据迁移证据
