@@ -138,6 +138,21 @@ class HistoryServiceTests(unittest.TestCase):
             self.assertEqual(len(runs), 2)
             self.assertEqual(runs[0].target_product, "B")
 
+    def test_history_service_saves_and_reads_run_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = KnowledgeRepository(f"sqlite:///{root / 'v2.sqlite3'}", "private-owner")
+            repo.initialize()
+            run = repo.create_pipeline_run(CreateRunCommand("A", "A", "offline", "rules", 0), "a")
+            service = HistoryService(repo, LocalArtifactStore(root / "storage"))
+
+            service.save_review(run.id, "accepted", 4, "可进入下一轮", False)
+            review = service.get_review(run.id)
+
+            self.assertEqual(review.decision, "accepted")
+            self.assertEqual(review.rating, 4)
+            self.assertEqual(review.notes, "可进入下一轮")
+
 
 if __name__ == "__main__":
     unittest.main()

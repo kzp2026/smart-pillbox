@@ -60,6 +60,64 @@ class AppStructureTests(unittest.TestCase):
         self.assertIn("加载效果图预览", render_images_source)
         self.assertIn('data_mime_prefixes=("image/",)', render_images_source)
 
+    def test_overview_results_are_scoped_to_the_active_product(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+        start = source.index("def _render_overview(")
+        end = source.index("\ndef _create_import_run(", start)
+        overview_source = source[start:end]
+
+        self.assertIn("active = _active_product(st_module)", overview_source)
+        self.assertIn("_cached_runs(history, 8, active)", overview_source)
+        self.assertNotIn("_cached_runs(history, 8)\n", overview_source)
+
+    def test_overview_uses_real_navigation_buttons_and_product_selector(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn("设为当前产品", source)
+        self.assertIn("打开导入评论", source)
+        self.assertIn("打开需求生成", source)
+        self.assertIn("打开数据分析", source)
+        self.assertIn("打开效果图", source)
+
+    def test_paid_image_generation_defaults_to_one_image(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+        start = source.index("def _render_demand(")
+        end = source.index("\ndef _render_artifact(", start)
+
+        self.assertIn('"效果图数量", min_value=0, max_value=8, value=1', source[start:end])
+        self.assertIn("最大付费调用数量", source[start:end])
+
+    def test_initialization_failure_has_safe_recovery_actions(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn("重新连接私有服务", source)
+        self.assertIn("打开 Streamlit 应用管理", source)
+        self.assertIn("连接地址、数据库密码或 Supabase 连接池凭据", source)
+
+    def test_custom_mascot_is_not_rendered(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("mascot_html", source)
+
+    def test_history_has_decision_and_filter_controls(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+
+        for label in ("运行状态", "生成模型", "仅看有图片", "结果决策", "对比两个版本"):
+            self.assertIn(label, source)
+
+    def test_archive_restore_requires_product_assignment(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn("恢复到产品", source)
+        self.assertNotIn('CreateRunCommand("恢复的历史结果"', source)
+
+    def test_import_exposes_optional_metadata_mapping_and_admin_grouping(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+
+        for label in ("评分列（可选）", "评论日期列（可选）", "产品版本列（可选）", "渠道列（可选）", "用户标签列（可选）"):
+            self.assertIn(label, source)
+        self.assertIn("管理员工具 · 原站数据复制", source)
+
     def test_app_bootstrap_avoids_new_domain_type_imports_during_hot_reload(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
         tree = ast.parse(source)

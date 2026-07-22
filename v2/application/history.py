@@ -30,6 +30,15 @@ class RunDetail:
     artifacts: tuple[HistoryArtifact, ...]
 
 
+@dataclass(frozen=True)
+class RunReview:
+    decision: str = "undecided"
+    rating: int = 0
+    notes: str = ""
+    is_final: bool = False
+    updated_at: str = ""
+
+
 class HistoryService:
     def __init__(self, repository: KnowledgeRepository, store: ArtifactStore) -> None:
         self.repository = repository
@@ -97,6 +106,29 @@ class HistoryService:
             quality_status=str(generation.get("quality_status") or ""),
             artifacts=tuple(artifacts),
         )
+
+    def get_review(self, run_id: str) -> RunReview:
+        row = self.repository.get_run_review(run_id)
+        if not row:
+            return RunReview()
+        return RunReview(
+            decision=str(row.get("decision") or "undecided"),
+            rating=int(row.get("rating") or 0),
+            notes=str(row.get("notes") or ""),
+            is_final=bool(row.get("is_final")),
+            updated_at=str(row.get("updated_at") or ""),
+        )
+
+    def save_review(
+        self,
+        run_id: str,
+        decision: str,
+        rating: int,
+        notes: str,
+        is_final: bool,
+    ) -> RunReview:
+        self.repository.save_run_review(run_id, decision, rating, notes, is_final)
+        return self.get_review(run_id)
 
     @staticmethod
     def _as_dict(value: object) -> dict:

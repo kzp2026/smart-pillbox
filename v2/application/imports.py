@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from v2.adapters.postgres import KnowledgeRepository, clean_text
 from v2.domain.models import ImportReport
@@ -33,11 +33,19 @@ class ImportService:
         category: str,
         source_filename: str,
         comments: Sequence[str],
+        metadata: Sequence[Mapping[str, object]] | None = None,
     ) -> KnowledgeImportResult:
-        cleaned = [clean_text(comment) for comment in comments if clean_text(comment)]
+        metadata_rows = list(metadata or ())
+        cleaned_pairs = [
+            (clean_text(comment), metadata_rows[index] if index < len(metadata_rows) else {})
+            for index, comment in enumerate(comments)
+            if clean_text(comment)
+        ]
+        cleaned = [comment for comment, _ in cleaned_pairs]
+        cleaned_metadata = [row for _, row in cleaned_pairs]
         before_requirements = self.repository.count_rows("requirements")
         report = self.repository.ingest_comments(
-            product_name, category, source_filename, cleaned
+            product_name, category, source_filename, cleaned, metadata=cleaned_metadata
         )
         if report.inserted_count == 0:
             return KnowledgeImportResult(report, 0)

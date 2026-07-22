@@ -53,6 +53,31 @@ class ImageGenerationServiceTests(unittest.TestCase):
             self.assertEqual(len(provider.requests), 3)
             self.assertEqual(len(repo.list_artifacts_for_run(run.id)), 2)
 
+    def test_reports_progress_after_each_image_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = KnowledgeRepository(f"sqlite:///{root / 'v2.sqlite3'}", "owner")
+            repo.initialize()
+            run = repo.create_pipeline_run(
+                CreateRunCommand("智能药盒", "更清晰的提醒", "fake", "model", 2),
+                "image-progress-test",
+            )
+            progress = []
+
+            ImageGenerationService(repo, LocalArtifactStore(root / "artifacts"), FakeImageProvider()).generate(
+                run.id,
+                [
+                    {"key": "hero", "label": "主效果图", "prompt": "hero prompt"},
+                    {"key": "detail", "label": "细节图", "prompt": "detail prompt"},
+                ],
+                count=2,
+                on_progress=lambda completed, total, label, succeeded: progress.append(
+                    (completed, total, label, succeeded)
+                ),
+            )
+
+            self.assertEqual(progress, [(1, 2, "主效果图", True), (2, 2, "细节图", True)])
+
 
 if __name__ == "__main__":
     unittest.main()

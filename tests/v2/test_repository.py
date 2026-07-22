@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from v2.adapters.postgres import KnowledgeRepository
+from v2.adapters.storage import LocalArtifactStore
+from v2.domain.models import ArtifactKind
 from v2.domain.models import CreateRunCommand, RunStatus
 
 
@@ -167,6 +169,88 @@ class KnowledgeRepositoryTests(unittest.TestCase):
         self.assertEqual(snapshot.generation_run_count, 0)
         self.assertEqual(snapshot.artifact_count, 0)
         self.assertEqual(snapshot.image_count, 0)
+
+    def test_product_workspace_snapshot_is_scoped_to_one_product(self) -> None:
+        first = self.repo.ingest_comments("A", "分类", "a.csv", ["A 评论"])
+        self.repo.add_requirement_once(first.product_id, first.batch_id, "A 需求", "", [], "A 评论")
+        self.repo.ingest_comments("B", "分类", "b.csv", ["B 评论", "B 第二条"])
+        self.repo.create_pipeline_run(CreateRunCommand("A", "A 设计", "offline", "rules", 0), "a-run")
+        self.repo.create_pipeline_run(CreateRunCommand("B", "B 设计", "offline", "rules", 0), "b-run")
+
+        snapshot = self.repo.product_workspace_snapshot("A")
+
+        self.assertEqual(snapshot.product_count, 1)
+        self.assertEqual(snapshot.comment_count, 1)
+        self.assertEqual(snapshot.requirement_count, 1)
+        self.assertEqual(snapshot.generation_run_count, 1)
+
+    def test_run_review_is_owner_scoped_and_upserted(self) -> None:
+        run = self.repo.create_pipeline_run(
+            CreateRunCommand("A", "设计", "offline", "rules", 0), "review-run"
+        )
+        other = KnowledgeRepository(self.database_url, owner_id="other-owner")
+        other.initialize()
+
+        self.repo.save_run_review(run.id, "accepted", 4, "第一版", False)
+        self.repo.save_run_review(run.id, "final", 5, "最终版", True)
+
+        review = self.repo.get_run_review(run.id)
+        self.assertEqual(review["decision"], "final")
+        self.assertEqual(review["rating"], 5)
+        self.assertEqual(review["notes"], "最终版")
+        self.assertEqual(review["is_final"], 1)
+        self.assertIsNone(other.get_run_review(run.id))
+
+    def test_product_evidence_returns_only_matching_product(self) -> None:
+        first = self.repo.ingest_comments("A", "分类", "a.csv", ["A 评论"])
+        self.repo.add_requirement_once(first.product_id, first.batch_id, "A 需求", "A 描述", ["A"], "A 评论")
+        self.repo.ingest_comments("B", "分类", "b.csv", ["B 评论"])
+
+        evidence = self.repo.list_product_evidence("A", limit=20)
+
+        self.assertEqual([item["title"] for item in evidence["requirements"]], ["A 需求"])
+        self.assertEqual([item["comment"] for item in evidence["comments"]], ["A 评论"])
+
+    def test_comment_import_preserves_optional_product_metadata(self) -> None:
+        self.repo.ingest_comments(
+            "A",
+            "分类",
+            "a.csv",
+            ["带元数据的评论"],
+            metadata=[
+                {
+                    "rating": 4.5,
+                    "commented_at": "2026-07-01",
+                    "product_variant": "白色版",
+                    "source_channel": "电商",
+                    "user_segment": "长辈用户",
+                }
+            ],
+        )
+
+        comment = self.repo.list_product_evidence("A")["comments"][0]
+
+        self.assertEqual(comment["rating"], 4.5)
+        self.assertEqual(comment["commented_at"], "2026-07-01")
+        self.assertEqual(comment["product_variant"], "白色版")
+        self.assertEqual(comment["source_channel"], "电商")
+        self.assertEqual(comment["user_segment"], "长辈用户")
+
+    def test_run_ids_with_images_uses_saved_artifacts_not_planned_count(self) -> None:
+        planned_only = self.repo.create_pipeline_run(
+            CreateRunCommand("A", "设计", "fake", "model", 1), "planned-only"
+        )
+        saved = self.repo.create_pipeline_run(
+            CreateRunCommand("A", "设计", "fake", "model", 1), "saved-image"
+        )
+        store = LocalArtifactStore(Path(self.temp_dir.name) / "artifacts")
+        artifact = store.put(saved.id, "result.png", b"png", "image/png")
+        self.repo.record_artifact(saved.id, ArtifactKind.IMAGE, artifact)
+
+        image_run_ids = self.repo.list_run_ids_with_images("A")
+
+        self.assertEqual(image_run_ids, {saved.id})
+        self.assertNotIn(planned_only.id, image_run_ids)
 
 
 if __name__ == "__main__":

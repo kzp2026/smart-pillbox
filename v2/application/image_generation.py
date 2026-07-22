@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Mapping, Protocol, Sequence
+from typing import Callable, Mapping, Protocol, Sequence
 
 from v2.adapters.postgres import KnowledgeRepository
 from v2.adapters.storage import ArtifactStore
@@ -45,6 +45,7 @@ class ImageGenerationService:
         visual_assets: Sequence[Mapping[str, object]],
         count: int,
         size: str = "1536x1024",
+        on_progress: Callable[[int, int, str, bool], None] | None = None,
     ) -> ImageGenerationReport:
         selected = list(visual_assets)[: max(0, int(count))]
         if not selected:
@@ -66,6 +67,7 @@ class ImageGenerationService:
             )
             if not result.succeeded:
                 failures.append(ImageFailure(label, result.error or "图片生成失败。"))
+                self._notify_progress(on_progress, index, len(selected), label, False)
                 continue
             stored = self.store.put(
                 run_id,
@@ -76,6 +78,7 @@ class ImageGenerationService:
             artifact_ids.append(
                 self.repository.record_artifact(run_id, ArtifactKind.IMAGE, stored)
             )
+            self._notify_progress(on_progress, index, len(selected), label, True)
 
         if failures and artifact_ids:
             status = RunStatus.PARTIAL
@@ -94,6 +97,22 @@ class ImageGenerationService:
         return ImageGenerationReport(
             len(selected), len(artifact_ids), tuple(artifact_ids), tuple(failures)
         )
+
+    @staticmethod
+    def _notify_progress(
+        callback: Callable[[int, int, str, bool], None] | None,
+        completed: int,
+        total: int,
+        label: str,
+        succeeded: bool,
+    ) -> None:
+        if callback is None:
+            return
+        try:
+            callback(completed, total, label, succeeded)
+        except Exception:
+            # Rendering progress must never interrupt an already-paid provider call.
+            return
 
     @staticmethod
     def _safe_key(value: str) -> str:

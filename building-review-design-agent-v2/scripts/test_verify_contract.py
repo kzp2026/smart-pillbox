@@ -25,6 +25,8 @@ class ContractVerifierTests(unittest.TestCase):
         self.assertIn("v2/application/runtime_state.py", REQUIRED_PATHS)
         self.assertIn("tests/v2/test_view_cache.py", REQUIRED_PATHS)
         self.assertIn("v2/assets/studio-background.webp", REQUIRED_PATHS)
+        self.assertIn("v2/migrations/002_product_workflow_hardening.sql", REQUIRED_PATHS)
+        self.assertNotIn("v2/assets/assistant-mascot.webp", REQUIRED_PATHS)
 
     def test_missing_required_path_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

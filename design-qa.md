@@ -1,5 +1,16 @@
 # Original interface QA record
 
+## 2026-07-22 · V2 workflow hardening
+
+- Desktop evidence: `docs/qa/v2-workflow-hardening-1440x1000.png`.
+- Mobile evidence: `docs/qa/v2-workflow-hardening-390x844.png`.
+- Viewports: 1440×1000 and 390×844; document width equaled viewport width at both sizes; browser console errors: 0.
+- Live navigation timing: History → AI Images 129 ms; AI Images → History 69 ms on the local SQLite fixture. Large image bytes remain opt-in.
+- Floating UI: `.v2-mascot` count 0; Streamlit Viewer/deploy badge count 0; no robot or bottom-right platform badge was visible. The theme also hides the status widget when Streamlit inserts it.
+- Product workflow: native overview actions, explicit current-product selection, product-scoped progress/results/history, default one paid image, history filters/decisions/comparison/evidence, and restore-to-product assignment.
+- Recovery: initialization failures show a sanitized checklist, retry and Streamlit management link without public-data fallback.
+- Final result: passed locally. Production availability still depends on the deployed `V2_DATABASE_URL` credential.
+
 **Source Visual Truth Path**
 - `C:\Users\15854\.codex\generated_images\019f25ec-7980-7d52-9cef-9c4510c39bd7\ig_02a5390d07e37add016a48d53947908191b97c0469506411a2.png`
 

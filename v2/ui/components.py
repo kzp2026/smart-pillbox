@@ -139,10 +139,6 @@ def product_rows_html(products: Sequence[Mapping[str, Any]]) -> str:
     return "".join(rows)
 
 
-def mascot_html() -> str:
-    return '<div class="v2-mascot" role="img" aria-label="AI 工作台助手"></div>'
-
-
 def login_intro_html() -> str:
     return """
 <div class="v2-login-head">

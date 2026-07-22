@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_SQL = ROOT / "v2" / "migrations" / "001_agent_v2_schema.sql"
+HARDENING_SQL = ROOT / "v2" / "migrations" / "002_product_workflow_hardening.sql"
 
 
 class SchemaSqlTests(unittest.TestCase):
@@ -41,6 +42,13 @@ class SchemaSqlTests(unittest.TestCase):
         self.assertIn("unique (owner_id, product_id, fingerprint)", sql)
         self.assertIn("unique (owner_id, fingerprint)", sql)
         self.assertIn("unique (owner_id, idempotency_key)", sql)
+
+    def test_hardening_migration_adds_reviews_and_comment_metadata(self) -> None:
+        sql = HARDENING_SQL.read_text(encoding="utf-8").lower()
+
+        self.assertIn("create table if not exists agent_v2.run_reviews", sql)
+        for column in ("rating", "commented_at", "product_variant", "source_channel", "user_segment"):
+            self.assertIn(f"add column if not exists {column}", sql)
 
 
 if __name__ == "__main__":

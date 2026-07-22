@@ -25,14 +25,12 @@ def default_asset_urls() -> dict[str, str]:
     return {
         "background": asset_data_uri(ASSET_DIR / "studio-background.webp"),
         "logo": asset_data_uri(ASSET_DIR / "ai-brand-mark.webp"),
-        "mascot": asset_data_uri(ASSET_DIR / "assistant-mascot.webp"),
     }
 
 
 def build_theme_css(asset_urls: Mapping[str, str]) -> str:
     background = html.escape(asset_urls["background"], quote=True)
     logo = html.escape(asset_urls["logo"], quote=True)
-    mascot = html.escape(asset_urls["mascot"], quote=True)
     return f"""
 <style>
 :root {{
@@ -75,8 +73,26 @@ html, body, [class*="css"] {{
   background: transparent !important;
 }}
 
-[data-testid="stToolbar"], [data-testid="stDecoration"] {{
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="stViewerBadge"],
+[data-testid="stAppDeployButton"],
+[data-testid="manage-app-button"],
+[data-testid="stMainMenu"],
+[data-testid="stToolbarActions"],
+[class*="viewerBadge"],
+[class*="ViewerBadge"],
+[class*="deployButton"],
+[class*="DeployButton"],
+iframe[title="streamlit_status"],
+#MainMenu,
+footer {{
   display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
 }}
 
 [data-testid="stAppViewContainer"] > .main {{
@@ -373,22 +389,6 @@ h1 {{
   border-radius: 10px;
 }}
 
-.v2-mascot {{
-  position: fixed;
-  z-index: 999;
-  right: 22px;
-  bottom: 12px;
-  width: 104px;
-  height: 104px;
-  pointer-events: none;
-  background-image: url("{mascot}");
-  background-position: center 43%;
-  background-size: 118%;
-  border: 1px solid rgba(36, 215, 223, 0.55);
-  border-radius: 30px;
-  box-shadow: 0 0 34px rgba(22, 139, 255, 0.35);
-}}
-
 .v2-login-shell {{
   display: grid;
   place-items: center;
@@ -554,7 +554,6 @@ input, textarea, [data-baseweb="select"] > div {{
   .v2-process {{ grid-template-columns: repeat(7, 104px); }}
   .v2-metrics, .v2-action-grid {{ grid-template-columns: 1fr; }}
   .v2-product-row {{ grid-template-columns: 1fr 1fr; gap: 7px; }}
-  .v2-mascot {{ display: none; }}
   .v2-login-card {{ padding: 20px 16px; }}
   .st-key-v2_mobile_nav {{
     display: block;

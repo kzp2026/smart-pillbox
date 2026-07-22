@@ -35,8 +35,24 @@ class ThemeTests(unittest.TestCase):
         self.assertIn("data:image/png;base64,background", css)
         self.assertIn("@media (max-width: 560px)", css)
         self.assertIn(":focus-visible", css)
-        self.assertIn(".v2-mascot", css)
+        self.assertNotIn(".v2-mascot", css)
         self.assertNotIn("linear-gradient", css)
+
+    def test_theme_hides_streamlit_cloud_badges_and_status_floaters(self) -> None:
+        css = build_theme_css(
+            {
+                "background": "data:image/png;base64,background",
+                "logo": "data:image/png;base64,logo",
+            }
+        )
+
+        for selector in (
+            '[data-testid="stStatusWidget"]',
+            '[data-testid="stViewerBadge"]',
+            '[data-testid="stAppDeployButton"]',
+            '[class*="viewerBadge"]',
+        ):
+            self.assertIn(selector, css)
 
     def test_native_button_like_controls_share_the_dark_console_palette(self) -> None:
         css = build_theme_css(
@@ -63,6 +79,7 @@ class ThemeTests(unittest.TestCase):
         assets = default_asset_urls()
 
         self.assertTrue(all(value.startswith("data:image/webp;base64,") for value in assets.values()))
+        self.assertNotIn("mascot", assets)
         self.assertLess(sum(len(value) for value in assets.values()), 900_000)
 
 

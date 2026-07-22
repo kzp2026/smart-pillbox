@@ -27,10 +27,10 @@ REQUIRED_PATHS = (
     "v2/application/runtime_state.py",
     "v2/assets/studio-background.webp",
     "v2/assets/ai-brand-mark.webp",
-    "v2/assets/assistant-mascot.webp",
     "v2/ui/errors.py",
     "v2/pipeline/catalog.py",
     "v2/migrations/001_agent_v2_schema.sql",
+    "v2/migrations/002_product_workflow_hardening.sql",
     "tests/v2/test_original_freeze.py",
     "tests/v2/test_pipeline_catalog.py",
     "tests/v2/test_auth.py",
@@ -141,10 +141,15 @@ def verify_static(root: Path) -> list[str]:
         errors.append("V2 入口缺少旧模块热更新时使用的工作台零值回退。")
     for marker in (
         "workspace_snapshot",
+        "product_workspace_snapshot",
         "配置百炼效果图 Key",
         "V2_IMAGE_API_KEY",
         "加载效果图预览",
         "v2_active_product",
+        "结果决策",
+        "对比两个版本",
+        "最大付费调用数量",
+        "重新连接私有服务",
     ):
         if marker not in app_source:
             errors.append(f"V2 导航性能或百炼 Key 入口契约缺少：{marker}")
@@ -160,8 +165,14 @@ def verify_static(root: Path) -> list[str]:
             errors.append(f"V2 产品历史隔离或按需资产加载契约缺少：{marker}")
 
     repository_source = (root / "v2/adapters/postgres.py").read_text(encoding="utf-8")
-    if "def workspace_snapshot(" not in repository_source:
-        errors.append("V2 仓库缺少单查询工作台快照。")
+    for marker in (
+        "def workspace_snapshot(",
+        "def product_workspace_snapshot(",
+        "def save_run_review(",
+        "def list_product_evidence(",
+    ):
+        if marker not in repository_source:
+            errors.append(f"V2 仓库契约缺少：{marker}")
 
     theme_source = (root / "v2/ui/theme.py").read_text(encoding="utf-8")
     for marker in (
@@ -169,6 +180,7 @@ def verify_static(root: Path) -> list[str]:
         '[data-testid="stCode"] button',
         "color-scheme: dark",
         'ASSET_DIR / "studio-background.webp"',
+        '[data-testid="stViewerBadge"]',
     ):
         if marker not in theme_source:
             errors.append(f"V2 深色原生控件契约缺少：{marker}")
@@ -178,7 +190,10 @@ def verify_static(root: Path) -> list[str]:
         if key not in config_source:
             errors.append(f"V2 配置契约缺少：{key}")
 
-    schema_source = (root / "v2/migrations/001_agent_v2_schema.sql").read_text(encoding="utf-8").lower()
+    schema_source = "\n".join(
+        path.read_text(encoding="utf-8").lower()
+        for path in sorted((root / "v2/migrations").glob("[0-9][0-9][0-9]_*.sql"))
+    )
     for marker in (
         "create schema if not exists agent_v2",
         "revoke all on schema agent_v2 from anon, authenticated",
@@ -186,8 +201,12 @@ def verify_static(root: Path) -> list[str]:
     ):
         if marker not in schema_source:
             errors.append(f"私有 schema 契约缺少：{marker}")
-    if schema_source.count("enable row level security") < 11:
-        errors.append("agent_v2 启用 RLS 的表少于 11 张。")
+    if schema_source.count("enable row level security") < 12:
+        errors.append("agent_v2 启用 RLS 的表少于 12 张。")
+    if "create table if not exists agent_v2.run_reviews" not in schema_source:
+        errors.append("agent_v2 缺少运行评审表。")
+    if "mascot_html" in app_source or "assistant-mascot" in theme_source:
+        errors.append("V2 仍在加载或渲染已删除的右下角机器人。")
     if "auth.uid()" in schema_source:
         errors.append("检测到 Supabase Auth 多租户策略；本项目使用固定服务器 owner。")
 

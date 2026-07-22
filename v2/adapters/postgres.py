@@ -7,7 +7,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Iterator, Mapping, Sequence
 
 from v2.adapters.storage import StoredArtifact
 from v2.domain.models import (
@@ -34,6 +34,7 @@ _TABLES = {
     "artifact_blobs",
     "migration_ledger",
     "login_audit",
+    "run_reviews",
 }
 
 
@@ -100,9 +101,23 @@ class KnowledgeRepository:
             if self.is_sqlite:
                 for statement in self._sqlite_schema():
                     connection.execute(statement)
+                existing_columns = {
+                    str(row["name"])
+                    for row in connection.execute("PRAGMA table_info(comments)").fetchall()
+                }
+                for column, definition in {
+                    "rating": "REAL",
+                    "commented_at": "TEXT NOT NULL DEFAULT ''",
+                    "product_variant": "TEXT NOT NULL DEFAULT ''",
+                    "source_channel": "TEXT NOT NULL DEFAULT ''",
+                    "user_segment": "TEXT NOT NULL DEFAULT ''",
+                }.items():
+                    if column not in existing_columns:
+                        connection.execute(f"ALTER TABLE comments ADD COLUMN {column} {definition}")
                 return
-            sql_path = Path(__file__).resolve().parents[1] / "migrations" / "001_agent_v2_schema.sql"
-            connection.execute(sql_path.read_text(encoding="utf-8"))
+            migrations_dir = Path(__file__).resolve().parents[1] / "migrations"
+            for sql_path in sorted(migrations_dir.glob("[0-9][0-9][0-9]_*.sql")):
+                connection.execute(sql_path.read_text(encoding="utf-8"))
 
     def ingest_comments(
         self,
@@ -110,9 +125,14 @@ class KnowledgeRepository:
         category: str,
         source_filename: str,
         comments: Sequence[str],
+        metadata: Sequence[Mapping[str, object]] | None = None,
     ) -> ImportReport:
-        normalized = [clean_text(comment) for comment in comments]
-        valid = [comment for comment in normalized if comment]
+        metadata_rows = list(metadata or ())
+        normalized = [
+            (clean_text(comment), metadata_rows[index] if index < len(metadata_rows) else {})
+            for index, comment in enumerate(comments)
+        ]
+        valid = [(comment, row) for comment, row in normalized if comment]
         now = utc_now()
         with self.connect() as connection:
             product_id = self._upsert_product(connection, clean_text(product_name), clean_text(category), now)
@@ -125,12 +145,13 @@ class KnowledgeRepository:
             )
             batch_id = self._last_id(connection, cursor)
             inserted_count = 0
-            for comment in valid:
+            for comment, comment_metadata in valid:
                 comment_fingerprint = fingerprint(comment)
                 statement = (
                     "INSERT INTO comments "
-                    "(owner_id, product_id, batch_id, comment_original, clean_comment, fingerprint, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)"
+                    "(owner_id, product_id, batch_id, comment_original, clean_comment, fingerprint, created_at, "
+                    "rating, commented_at, product_variant, source_channel, user_segment) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 if self.is_sqlite:
                     statement = statement.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
@@ -138,7 +159,20 @@ class KnowledgeRepository:
                     statement += " ON CONFLICT DO NOTHING"
                 inserted = connection.execute(
                     self._sql(statement),
-                    (self.owner_id, product_id, batch_id, comment, comment, comment_fingerprint, now),
+                    (
+                        self.owner_id,
+                        product_id,
+                        batch_id,
+                        comment,
+                        comment,
+                        comment_fingerprint,
+                        now,
+                        self._optional_float(comment_metadata.get("rating")),
+                        clean_text(comment_metadata.get("commented_at")),
+                        clean_text(comment_metadata.get("product_variant")),
+                        clean_text(comment_metadata.get("source_channel")),
+                        clean_text(comment_metadata.get("user_segment")),
+                    ),
                 )
                 inserted_count += max(0, int(inserted.rowcount or 0))
             connection.execute(
@@ -345,500 +379,4 @@ class KnowledgeRepository:
                 self._sql(statement),
                 (
                     stage_uuid,
-                    self.owner_id,
-                    pipeline_run_id,
-                    clean_text(stage_id),
-                    status.value,
-                    clean_text(input_hash),
-                    clean_text(error_summary)[:1200],
-                    now,
-                    now,
-                ),
-            )
-        return stage_uuid
-
-    def save_generation_run(
-        self,
-        pipeline_run_id: str,
-        context_json: str,
-        result_json: str,
-        quality_score: float,
-        quality_status: str,
-    ) -> str:
-        with self.connect() as connection:
-            existing = connection.execute(
-                self._sql("SELECT id FROM generation_runs WHERE owner_id = ? AND pipeline_run_id = ?"),
-                (self.owner_id, pipeline_run_id),
-            ).fetchone()
-            if existing:
-                return str(existing["id"])
-            generation_id = str(uuid.uuid4())
-            connection.execute(
-                self._sql(
-                    "INSERT INTO generation_runs "
-                    "(id, owner_id, pipeline_run_id, context_json, result_json, quality_score, quality_status, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    generation_id,
-                    self.owner_id,
-                    pipeline_run_id,
-                    context_json,
-                    result_json,
-                    float(quality_score),
-                    clean_text(quality_status),
-                    utc_now(),
-                ),
-            )
-        return generation_id
-
-    def get_generation_run(self, pipeline_run_id: str) -> dict | None:
-        with self.connect() as connection:
-            row = connection.execute(
-                self._sql(
-                    "SELECT * FROM generation_runs WHERE owner_id = ? AND pipeline_run_id = ?"
-                ),
-                (self.owner_id, pipeline_run_id),
-            ).fetchone()
-        return dict(row) if row else None
-
-    def record_artifact(
-        self,
-        pipeline_run_id: str,
-        kind: ArtifactKind | str,
-        artifact: StoredArtifact,
-    ) -> str:
-        kind_value = kind.value if isinstance(kind, ArtifactKind) else clean_text(kind)
-        with self.connect() as connection:
-            existing = connection.execute(
-                self._sql("SELECT id FROM artifacts WHERE owner_id = ? AND storage_path = ?"),
-                (self.owner_id, artifact.path),
-            ).fetchone()
-            if existing:
-                return str(existing["id"])
-            artifact_id = str(uuid.uuid4())
-            connection.execute(
-                self._sql(
-                    "INSERT INTO artifacts "
-                    "(id, owner_id, pipeline_run_id, kind, name, storage_path, mime_type, size_bytes, sha256, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    artifact_id,
-                    self.owner_id,
-                    pipeline_run_id,
-                    kind_value,
-                    artifact.name,
-                    artifact.path,
-                    artifact.mime_type,
-                    artifact.size_bytes,
-                    artifact.sha256,
-                    utc_now(),
-                ),
-            )
-        return artifact_id
-
-    def find_artifact_by_name(self, name: str) -> dict | None:
-        with self.connect() as connection:
-            row = connection.execute(
-                self._sql(
-                    "SELECT * FROM artifacts WHERE owner_id = ? AND name = ? ORDER BY created_at DESC LIMIT 1"
-                ),
-                (self.owner_id, clean_text(name)),
-            ).fetchone()
-        return dict(row) if row else None
-
-    def list_artifacts(self) -> list[dict]:
-        with self.connect() as connection:
-            rows = connection.execute(
-                self._sql("SELECT * FROM artifacts WHERE owner_id = ? ORDER BY created_at"),
-                (self.owner_id,),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def list_artifacts_for_run(self, pipeline_run_id: str) -> list[dict]:
-        with self.connect() as connection:
-            rows = connection.execute(
-                self._sql(
-                    "SELECT * FROM artifacts WHERE owner_id = ? AND pipeline_run_id = ? ORDER BY created_at"
-                ),
-                (self.owner_id, pipeline_run_id),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def find_comment_id(self, product_id: int, comment: str) -> int | None:
-        with self.connect() as connection:
-            row = connection.execute(
-                self._sql(
-                    "SELECT id FROM comments WHERE owner_id = ? AND product_id = ? AND fingerprint = ?"
-                ),
-                (self.owner_id, product_id, fingerprint(comment)),
-            ).fetchone()
-        return int(row["id"]) if row else None
-
-    def get_migration_target(self, source_type: str, source_id: str, sha256: str = "") -> str | None:
-        with self.connect() as connection:
-            row = connection.execute(
-                self._sql(
-                    "SELECT target_id FROM migration_ledger "
-                    "WHERE owner_id = ? AND source_type = ? AND source_id = ? AND sha256 = ?"
-                ),
-                (self.owner_id, clean_text(source_type), clean_text(source_id), clean_text(sha256)),
-            ).fetchone()
-        return str(row["target_id"]) if row else None
-
-    def record_migration(
-        self,
-        source_type: str,
-        source_id: str,
-        target_type: str,
-        target_id: str,
-        sha256: str = "",
-    ) -> None:
-        statement = (
-            "INSERT INTO migration_ledger "
-            "(owner_id, source_type, source_id, target_type, target_id, sha256, migrated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)"
-        )
-        if self.is_sqlite:
-            statement = statement.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
-        else:
-            statement += " ON CONFLICT DO NOTHING"
-        with self.connect() as connection:
-            connection.execute(
-                self._sql(statement),
-                (
-                    self.owner_id,
-                    clean_text(source_type),
-                    clean_text(source_id),
-                    clean_text(target_type),
-                    clean_text(target_id),
-                    clean_text(sha256),
-                    utc_now(),
-                ),
-            )
-
-    def total_business_rows(self) -> int:
-        return sum(
-            self.count_rows(table)
-            for table in (
-                "products",
-                "comment_batches",
-                "comments",
-                "requirements",
-                "generation_runs",
-                "pipeline_runs",
-                "stage_runs",
-                "artifacts",
-            )
-        )
-
-    def list_products(self) -> list[ProductSummary]:
-        with self.connect() as connection:
-            rows = connection.execute(
-                self._sql(
-                    "SELECT p.id, p.name, p.category, p.description, p.created_at, p.updated_at, "
-                    "COUNT(DISTINCT c.id) AS comment_count, COUNT(DISTINCT r.id) AS requirement_count "
-                    "FROM products p "
-                    "LEFT JOIN comments c ON c.product_id = p.id AND c.owner_id = p.owner_id "
-                    "LEFT JOIN requirements r ON r.product_id = p.id AND r.owner_id = p.owner_id "
-                    "WHERE p.owner_id = ? "
-                    "GROUP BY p.id, p.name, p.category, p.description, p.created_at, p.updated_at "
-                    "ORDER BY p.updated_at DESC"
-                ),
-                (self.owner_id,),
-            ).fetchall()
-        return [
-            ProductSummary(
-                id=int(row["id"]),
-                name=str(row["name"]),
-                category=str(row["category"]),
-                description=str(row["description"]),
-                comment_count=int(row["comment_count"] or 0),
-                requirement_count=int(row["requirement_count"] or 0),
-                created_at=str(row["created_at"]),
-                updated_at=str(row["updated_at"]),
-            )
-            for row in rows
-        ]
-
-    def search_context(self, query: str, limit: int = 8) -> dict:
-        from scripts.product_knowledge_base import keyword_score
-
-        safe_limit = max(1, min(int(limit), 30))
-        with self.connect() as connection:
-            products = [
-                dict(row)
-                for row in connection.execute(
-                    self._sql(
-                        "SELECT id, name, category, description FROM products WHERE owner_id = ?"
-                    ),
-                    (self.owner_id,),
-                ).fetchall()
-            ]
-            requirements = [
-                dict(row)
-                for row in connection.execute(
-                    self._sql(
-                        "SELECT r.*, p.name AS product_name, p.category AS product_category "
-                        "FROM requirements r JOIN products p ON p.id = r.product_id "
-                        "WHERE r.owner_id = ? AND p.owner_id = ?"
-                    ),
-                    (self.owner_id, self.owner_id),
-                ).fetchall()
-            ]
-            comments = [
-                dict(row)
-                for row in connection.execute(
-                    self._sql(
-                        "SELECT c.*, p.name AS product_name, p.category AS product_category "
-                        "FROM comments c JOIN products p ON p.id = c.product_id "
-                        "WHERE c.owner_id = ? AND p.owner_id = ?"
-                    ),
-                    (self.owner_id, self.owner_id),
-                ).fetchall()
-            ]
-
-        product_scores = [
-            {
-                **item,
-                "score": keyword_score(
-                    query, item.get("name"), item.get("category"), item.get("description")
-                ),
-            }
-            for item in products
-        ]
-        requirement_scores = [
-            {
-                **item,
-                "score": max(float(item.get("score") or 0) / 10, 0)
-                + keyword_score(
-                    query,
-                    item.get("title"),
-                    item.get("description"),
-                    item.get("keywords"),
-                    item.get("evidence_text"),
-                    item.get("product_name"),
-                ),
-            }
-            for item in requirements
-        ]
-        comment_scores = [
-            {
-                **item,
-                "score": keyword_score(
-                    query,
-                    item.get("comment_original"),
-                    item.get("product_name"),
-                    item.get("product_category"),
-                ),
-            }
-            for item in comments
-        ]
-
-        selected_products = sorted(
-            (item for item in product_scores if item["score"] > 0),
-            key=lambda item: item["score"],
-            reverse=True,
-        )[:safe_limit]
-        selected_requirements = sorted(
-            (item for item in requirement_scores if item["score"] > 0),
-            key=lambda item: item["score"],
-            reverse=True,
-        )[:safe_limit]
-        selected_comments = sorted(
-            (item for item in comment_scores if item["score"] > 0),
-            key=lambda item: item["score"],
-            reverse=True,
-        )[:safe_limit]
-        return {
-            "query": clean_text(query),
-            "products": selected_products,
-            "requirements": selected_requirements,
-            "comments": selected_comments,
-            "evidence_count": len(selected_requirements) + len(selected_comments),
-        }
-
-    def delete_product(self, product_id: int) -> bool:
-        with self.connect() as connection:
-            cursor = connection.execute(
-                self._sql("DELETE FROM products WHERE id = ? AND owner_id = ?"),
-                (int(product_id), self.owner_id),
-            )
-        return int(cursor.rowcount or 0) > 0
-
-    def update_product(
-        self,
-        product_id: int,
-        name: str,
-        category: str = "",
-        description: str = "",
-    ) -> bool:
-        clean_name = clean_text(name)
-        if not clean_name:
-            raise ValueError("äº§å“åç§°ä¸èƒ½ä¸ºç©ºã€‚")
-        with self.connect() as connection:
-            cursor = connection.execute(
-                self._sql(
-                    "UPDATE products SET name = ?, category = ?, description = ?, updated_at = ? "
-                    "WHERE id = ? AND owner_id = ?"
-                ),
-                (
-                    clean_name,
-                    clean_text(category),
-                    clean_text(description),
-                    utc_now(),
-                    int(product_id),
-                    self.owner_id,
-                ),
-            )
-        return int(cursor.rowcount or 0) > 0
-
-    def count_rows(self, table: str) -> int:
-        if table not in _TABLES:
-            raise ValueError("ä¸å…è®¸æŸ¥è¯¢æœªçŸ¥è¡¨ã€‚")
-        with self.connect() as connection:
-            row = connection.execute(
-                self._sql(f"SELECT COUNT(*) AS count FROM {table} WHERE owner_id = ?"),
-                (self.owner_id,),
-            ).fetchone()
-        return int(row["count"] or 0)
-
-    def workspace_snapshot(self) -> WorkspaceSnapshot:
-        """Return all navigation counters in one database round-trip."""
-        with self.connect() as connection:
-            row = connection.execute(
-                self._sql(
-                    "SELECT "
-                    "(SELECT COUNT(*) FROM products WHERE owner_id = ?) AS product_count, "
-                    "(SELECT COUNT(*) FROM comments WHERE owner_id = ?) AS comment_count, "
-                    "(SELECT COUNT(*) FROM requirements WHERE owner_id = ?) AS requirement_count, "
-                    "(SELECT COUNT(*) FROM generation_runs WHERE owner_id = ?) AS generation_run_count, "
-                    "(SELECT COUNT(*) FROM artifacts WHERE owner_id = ?) AS artifact_count, "
-                    "(SELECT COUNT(*) FROM artifacts WHERE owner_id = ? AND kind = ?) AS image_count"
-                ),
-                (
-                    self.owner_id,
-                    self.owner_id,
-                    self.owner_id,
-                    self.owner_id,
-                    self.owner_id,
-                    self.owner_id,
-                    ArtifactKind.IMAGE.value,
-                ),
-            ).fetchone()
-        return WorkspaceSnapshot(
-            product_count=int(row["product_count"] or 0),
-            comment_count=int(row["comment_count"] or 0),
-            requirement_count=int(row["requirement_count"] or 0),
-            generation_run_count=int(row["generation_run_count"] or 0),
-            artifact_count=int(row["artifact_count"] or 0),
-            image_count=int(row["image_count"] or 0),
-        )
-
-    def _upsert_product(self, connection: object, name: str, category: str, now: str) -> int:
-        if not name:
-            raise ValueError("äº§å“åç§°ä¸èƒ½ä¸ºç©ºã€‚")
-        existing = connection.execute(
-            self._sql("SELECT id FROM products WHERE owner_id = ? AND name = ?"),
-            (self.owner_id, name),
-        ).fetchone()
-        if existing:
-            connection.execute(
-                self._sql("UPDATE products SET category = ?, updated_at = ? WHERE id = ? AND owner_id = ?"),
-                (category, now, int(existing["id"]), self.owner_id),
-            )
-            return int(existing["id"])
-        cursor = connection.execute(
-            self._sql(
-                "INSERT INTO products "
-                "(owner_id, name, category, description, visibility, created_at, updated_at) "
-                "VALUES (?, ?, ?, '', 'private', ?, ?)"
-            ),
-            (self.owner_id, name, category, now, now),
-        )
-        return self._last_id(connection, cursor)
-
-    def _pipeline_from_row(self, row: object) -> PipelineRun:
-        return PipelineRun(
-            id=str(row["id"]),
-            target_product=str(row["target_product"]),
-            demand_text=str(row["demand_text"]),
-            provider=str(row["provider"]),
-            model=str(row["model"]),
-            image_count=int(row["image_count"]),
-            status=RunStatus(str(row["status"])),
-            current_stage=str(row["current_stage"]),
-            created_at=str(row["created_at"]),
-            updated_at=str(row["updated_at"]),
-        )
-
-    def _last_id(self, connection: object, cursor: object) -> int:
-        if self.is_sqlite:
-            return int(cursor.lastrowid)
-        return int(connection.execute("SELECT LASTVAL() AS id").fetchone()["id"])
-
-    def _sql(self, statement: str) -> str:
-        return statement if self.is_sqlite else statement.replace("?", "%s")
-
-    @staticmethod
-    def _sqlite_schema() -> list[str]:
-        return [
-            """CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, name TEXT NOT NULL,
-                category TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
-                visibility TEXT NOT NULL DEFAULT 'private', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-                UNIQUE(owner_id, name))""",
-            """CREATE TABLE IF NOT EXISTS comment_batches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, product_id INTEGER NOT NULL,
-                source_filename TEXT NOT NULL DEFAULT '', comment_count INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL, FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE)""",
-            """CREATE TABLE IF NOT EXISTS comments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, product_id INTEGER NOT NULL,
-                batch_id INTEGER NOT NULL, comment_original TEXT NOT NULL, clean_comment TEXT NOT NULL,
-                fingerprint TEXT NOT NULL, created_at TEXT NOT NULL,
-                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,
-                FOREIGN KEY(batch_id) REFERENCES comment_batches(id) ON DELETE CASCADE,
-                UNIQUE(owner_id, product_id, fingerprint))""",
-            """CREATE TABLE IF NOT EXISTS requirements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, product_id INTEGER NOT NULL,
-                batch_id INTEGER, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', keywords TEXT NOT NULL DEFAULT '',
-                evidence_text TEXT NOT NULL DEFAULT '', score REAL NOT NULL DEFAULT 0, fingerprint TEXT NOT NULL,
-                created_at TEXT NOT NULL, FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,
-                FOREIGN KEY(batch_id) REFERENCES comment_batches(id) ON DELETE SET NULL,
-                UNIQUE(owner_id, fingerprint))""",
-            """CREATE TABLE IF NOT EXISTS pipeline_runs (
-                id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, target_product TEXT NOT NULL, demand_text TEXT NOT NULL,
-                provider TEXT NOT NULL, model TEXT NOT NULL, image_count INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL, current_stage TEXT NOT NULL DEFAULT '', idempotency_key TEXT NOT NULL,
-                error_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-                UNIQUE(owner_id, idempotency_key))""",
-            """CREATE TABLE IF NOT EXISTS generation_runs (
-                id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, pipeline_run_id TEXT, context_json TEXT NOT NULL DEFAULT '{}',
-                result_json TEXT NOT NULL DEFAULT '{}', quality_score REAL NOT NULL DEFAULT 0,
-                quality_status TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
-                FOREIGN KEY(pipeline_run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE,
-                UNIQUE(owner_id, pipeline_run_id))""",
-            """CREATE TABLE IF NOT EXISTS stage_runs (
-                id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, pipeline_run_id TEXT NOT NULL, stage_id TEXT NOT NULL,
-                status TEXT NOT NULL, input_hash TEXT NOT NULL DEFAULT '', error_summary TEXT NOT NULL DEFAULT '',
-                started_at TEXT, finished_at TEXT, UNIQUE(owner_id, pipeline_run_id, stage_id),
-                FOREIGN KEY(pipeline_run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE)""",
-            """CREATE TABLE IF NOT EXISTS artifacts (
-                id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, pipeline_run_id TEXT, kind TEXT NOT NULL,
-                name TEXT NOT NULL, storage_path TEXT NOT NULL, mime_type TEXT NOT NULL DEFAULT '', size_bytes INTEGER NOT NULL,
-                sha256 TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(owner_id, storage_path),
-                FOREIGN KEY(pipeline_run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE)""",
-            """CREATE TABLE IF NOT EXISTS artifact_blobs (
-                owner_id TEXT NOT NULL, storage_path TEXT NOT NULL, data BLOB NOT NULL,
-                mime_type TEXT NOT NULL DEFAULT '', size_bytes INTEGER NOT NULL,
-                sha256 TEXT NOT NULL, created_at TEXT NOT NULL,
-                PRIMARY KEY(owner_id, storage_path))""",
-            """CREATE TABLE IF NOT EXISTS migration_ledger (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, source_type TEXT NOT NULL,
-                source_id TEXT NOT NULL, target_type TEXT NOT NULL, target_id TEXT NOT NULL, sha256 TEXT NOT NULL DEFAULT '',
-                migrated_at TEXT NOT NULL, UNIQUE(owner_id, source_type, source_id, sha256))""",
-            """CREATE TABLE IF NOT EXISTS login_audit (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, session_fingerprint TEXT NOT NULL,
-                outcome TEXT NOT NULL, created_at TEXT NOT NULL)""",
-        ]
+           ç^ø¶‰žËkºwµç@€€€€€€€€€€€€€€€ˆ¡M1P=U9P ¨¤I=4ÁÉ½‘ÕÑÌ]!I½Ý¹•É}¥€ô€ü9¹…µ”€ô€ü¤LÁÉ½‘ÕÑ}½Õ¹Ð°€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ¡M1P=U9P ¨¤I=4½µµ•¹ÑÌŒ)=%8ÁÉ½‘ÕÑÌÀ=8À¹¥€ôŒ¹ÁÉ½‘ÕÑ}¥€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ]!IŒ¹½Ý¹•É}¥€ô€ü9À¹½Ý¹•É}¥€ô€ü9À¹¹…µ”€ô€ü¤L½µµ•¹Ñ}½Õ¹Ð°€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ¡M1P=U9P ¨¤I=4É•ÅÕ¥É•µ•¹ÑÌÈ)=%8ÁÉ½‘ÕÑÌÀ=8À¹¥€ôÈ¹ÁÉ½‘ÕÑ}¥€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ]!IÈ¹½Ý¹•É}¥€ô€ü9À¹½Ý¹•É}¥€ô€ü9À¹¹…µ”€ô€ü¤LÉ•ÅÕ¥É•µ•¹Ñ}½Õ¹Ð°€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ¡M1P=U9P ¨¤I=4Á¥Á•±¥¹•}ÉÕ¹ÌÁÈ€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ]!IÁÈ¹½Ý¹•É}¥€ô€ü9ÁÈ¹Ñ…É•Ñ}ÁÉ½‘ÕÐ€ô€ü¤L•¹•É…Ñ¥½¹}ÉÕ¹}½Õ¹Ð°€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ¡M1P=U9P ¨¤I=4…ÉÑ¥™…ÑÌ„)=%8Á¥Á•±¥¹•}ÉÕ¹ÌÁÈ=8ÁÈ¹¥€ô„¹Á¥Á•±¥¹•}ÉÕ¹}¥€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ]!I„¹½Ý¹•É}¥€ô€ü9ÁÈ¹½Ý¹•É}¥€ô€ü9ÁÈ¹Ñ…É•Ñ}ÁÉ½‘ÕÐ€ô€ü¤L…ÉÑ¥™…Ñ}½Õ¹Ð°€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ¡M1P=U9P ¨¤I=4…ÉÑ¥™…ÑÌ„)=%8Á¥Á•±¥¹•}ÉÕ¹ÌÁÈ=8ÁÈ¹¥€ô„¹Á¥Á•±¥¹•}ÉÕ¹}¥€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ]!I„¹½Ý¹•É}¥€ô€ü9ÁÈ¹½Ý¹•É}¥€ô€ü9ÁÈ¹Ñ…É•Ñ}ÁÉ½‘ÕÐ€ô€ü9„¹­¥¹€ô€ü¤L¥µ…•}½Õ¹Ðˆ(€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€€ (€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€ÁÉ½‘ÕÐ°(€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€ÁÉ½‘ÕÐ°(€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€ÁÉ½‘ÕÐ°(€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€ÁÉ½‘ÕÐ°(€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€ÁÉ½‘ÕÐ°(€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€ÁÉ½‘ÕÐ°(€€€€€€€€€€€€€€€€€€€ÉÑ¥™…Ñ-¥¹¹%5¹Ù…±Õ”°(€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€¤¹™•Ñ¡½¹” ¤(€€€€€€€É•ÑÕÉ¸]½É­ÍÁ…•M¹…ÁÍ¡½Ð (€€€€€€€€€€€ÁÉ½‘ÕÑ}½Õ¹Ðõ¥¹Ð¡É½Ýl‰ÁÉ½‘ÕÑ}½Õ¹Ð‰t½È€À¤°(€€€€€€€€€€€½µµ•¹Ñ}½Õ¹Ðõ¥¹Ð¡É½Ýl‰½µµ•¹Ñ}½Õ¹Ð‰t½È€À¤°(€€€€€€€€€€€É•ÅÕ¥É•µ•¹Ñ}½Õ¹Ðõ¥¹Ð¡É½Ýl‰É•ÅÕ¥É•µ•¹Ñ}½Õ¹Ð‰t½È€À¤°(€€€€€€€€€€€•¹•É…Ñ¥½¹}ÉÕ¹}½Õ¹Ðõ¥¹Ð¡É½Ýl‰•¹•É…Ñ¥½¹}ÉÕ¹}½Õ¹Ð‰t½È€À¤°(€€€€€€€€€€€…ÉÑ¥™…Ñ}½Õ¹Ðõ¥¹Ð¡É½Ýl‰…ÉÑ¥™…Ñ}½Õ¹Ð‰t½È€À¤°(€€€€€€€€€€€¥µ…•}½Õ¹Ðõ¥¹Ð¡É½Ýl‰¥µ…•}½Õ¹Ð‰t½È€À¤°(€€€€€€€€¤((€€€‘•˜±¥ÍÑ}ÁÉ½‘ÕÑ}•Ù¥‘•¹”¡Í•±˜°ÁÉ½‘ÕÑ}¹…µ”èÍÑÈ°±¥µ¥Ðè¥¹Ð€ô€ÈÀ¤€´ø‘¥ÑmÍÑÈ°±¥ÍÑm‘¥Ñutè(€€€€€€€ÁÉ½‘ÕÐ€ô±•…¹}Ñ•áÐ¡ÁÉ½‘ÕÑ}¹…µ”¤(€€€€€€€Í…™•}±¥µ¥Ð€ôµ…à Ä°µ¥¸¡¥¹Ð¡±¥µ¥Ð¤°€ÄÀÀ¤¤(€€€€€€€Ý¥Ñ Í•±˜¹½¹¹•Ð ¤…Ì½¹¹•Ñ¥½¸è(€€€€€€€€€€€É•ÅÕ¥É•µ•¹ÑÌ€ôl(€€€€€€€€€€€€€€€‘¥Ð¡É½Ü¤(€€€€€€€€€€€€€€€™½ÈÉ½Ü¥¸½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€€€€€Í•±˜¹}ÍÅ° (€€€€€€€€€€€€€€€€€€€€€€€€‰M1PÈ¹Ñ¥Ñ±”°È¹‘•ÍÉ¥ÁÑ¥½¸°È¹­•åÝ½É‘Ì°È¹•Ù¥‘•¹•}Ñ•áÐ°È¹Í½É”°È¹É•…Ñ•‘}…Ð€ˆ(€€€€€€€€€€€€€€€€€€€€€€€€‰I=4É•ÅÕ¥É•µ•¹ÑÌÈ)=%8ÁÉ½‘ÕÑÌÀ=8À¹¥€ôÈ¹ÁÉ½‘ÕÑ}¥9À¹½Ý¹•É}¥€ôÈ¹½Ý¹•É}¥€ˆ(€€€€€€€€€€€€€€€€€€€€€€€€‰]!IÈ¹½Ý¹•É}¥€ô€ü9À¹¹…µ”€ô€ü=IH	dÈ¹Í½É”M°È¹É•…Ñ•‘}…ÐM1%5%P€üˆ(€€€€€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€€€€€€¡Í•±˜¹½Ý¹•É}¥°ÁÉ½‘ÕÐ°Í…™•}±¥µ¥Ð¤°(€€€€€€€€€€€€€€€€¤¹™•Ñ¡…±° ¤(€€€€€€€€€€€t(€€€€€€€€€€€½µµ•¹ÑÌ€ôl(€€€€€€€€€€€€€€€ì(€€€€€€€€€€€€€€€€€€€€‰½µµ•¹ÐˆèÍÑÈ¡É½Ýl‰½µµ•¹Ñ}½É¥¥¹…°‰t¤°(€€€€€€€€€€€€€€€€€€€€‰É•…Ñ•‘}…ÐˆèÍÑÈ¡É½Ýl‰É•…Ñ•‘}…Ð‰t¤°(€€€€€€€€€€€€€€€€€€€€‰É…Ñ¥¹œˆèÉ½Ýl‰É…Ñ¥¹œ‰t°(€€€€€€€€€€€€€€€€€€€€‰½µµ•¹Ñ•‘}…ÐˆèÍÑÈ¡É½Ýl‰½µµ•¹Ñ•‘}…Ð‰t½È€ˆˆ¤°(€€€€€€€€€€€€€€€€€€€€‰ÁÉ½‘ÕÑ}Ù…É¥…¹ÐˆèÍÑÈ¡É½Ýl‰ÁÉ½‘ÕÑ}Ù…É¥…¹Ð‰t½È€ˆˆ¤°(€€€€€€€€€€€€€€€€€€€€‰Í½ÕÉ•}¡…¹¹•°ˆèÍÑÈ¡É½Ýl‰Í½ÕÉ•}¡…¹¹•°‰t½È€ˆˆ¤°(€€€€€€€€€€€€€€€€€€€€‰ÕÍ•É}Í•µ•¹ÐˆèÍÑÈ¡É½Ýl‰ÕÍ•É}Í•µ•¹Ð‰t½È€ˆˆ¤°(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€™½ÈÉ½Ü¥¸½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€€€€€Í•±˜¹}ÍÅ° (€€€€€€€€€€€€€€€€€€€€€€€€‰M1PŒ¹½µµ•¹Ñ}½É¥¥¹…°°Œ¹É•…Ñ•‘}…Ð°Œ¹É…Ñ¥¹œ°Œ¹½µµ•¹Ñ•‘}…Ð°€ˆ(€€€€€€€€€€€€€€€€€€€€€€€€‰Œ¹ÁÉ½‘ÕÑ}Ù…É¥…¹Ð°Œ¹Í½ÕÉ•}¡…¹¹•°°Œ¹ÕÍ•É}Í•µ•¹ÐI=4½µµ•¹ÑÌŒ€ˆ(€€€€€€€€€€€€€€€€€€€€€€€€‰)=%8ÁÉ½‘ÕÑÌÀ=8À¹¥€ôŒ¹ÁÉ½‘ÕÑ}¥9À¹½Ý¹•É}¥€ôŒ¹½Ý¹•É}¥€ˆ(€€€€€€€€€€€€€€€€€€€€€€€€‰]!IŒ¹½Ý¹•É}¥€ô€ü9À¹¹…µ”€ô€ü=IH	dŒ¹É•…Ñ•‘}…ÐM1%5%P€üˆ(€€€€€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€€€€€€¡Í•±˜¹½Ý¹•É}¥°ÁÉ½‘ÕÐ°Í…™•}±¥µ¥Ð¤°(€€€€€€€€€€€€€€€€¤¹™•Ñ¡…±° ¤(€€€€€€€€€€€t(€€€€€€€É•ÑÕÉ¸ì‰É•ÅÕ¥É•µ•¹ÑÌˆèÉ•ÅÕ¥É•µ•¹ÑÌ°€‰½µµ•¹ÑÌˆè½µµ•¹ÑÍô((€€€‘•˜±¥ÍÑ}ÉÕ¹}¥‘Í}Ý¥Ñ¡}¥µ…•Ì¡Í•±˜°ÁÉ½‘ÕÑ}¹…µ”èÍÑÈ¤€´øÍ•ÑmÍÑÉtè(€€€€€€€ÁÉ½‘ÕÐ€ô±•…¹}Ñ•áÐ¡ÁÉ½‘ÕÑ}¹…µ”¤(€€€€€€€Ý¥Ñ Í•±˜¹½¹¹•Ð ¤…Ì½¹¹•Ñ¥½¸è(€€€€€€€€€€€É½ÝÌ€ô½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€Í•±˜¹}ÍÅ° (€€€€€€€€€€€€€€€€€€€€‰M1P%MQ%9PÁÈ¹¥I=4Á¥Á•±¥¹•}ÉÕ¹ÌÁÈ€ˆ(€€€€€€€€€€€€€€€€€€€€‰)=%8…ÉÑ¥™…ÑÌ„=8„¹Á¥Á•±¥¹•}ÉÕ¹}¥€ôÁÈ¹¥9„¹½Ý¹•É}¥€ôÁÈ¹½Ý¹•É}¥€ˆ(€€€€€€€€€€€€€€€€€€€€‰]!IÁÈ¹½Ý¹•É}¥€ô€ü9ÁÈ¹Ñ…É•Ñ}ÁÉ½‘ÕÐ€ô€ü9„¹­¥¹€ô€üˆ(€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€€¡Í•±˜¹½Ý¹•É}¥°ÁÉ½‘ÕÐ°ÉÑ¥™…Ñ-¥¹¹%5¹Ù…±Õ”¤°(€€€€€€€€€€€€¤¹™•Ñ¡…±° ¤(€€€€€€€É•ÑÕÉ¸íÍÑÈ¡É½Ýl‰¥‰t¤™½ÈÉ½Ü¥¸É½ÝÍô((€€€‘•˜Í…Ù•}ÉÕ¹}É•Ù¥•Ü (€€€€€€€Í•±˜°(€€€€€€€Á¥Á•±¥¹•}ÉÕ¹}¥èÍÑÈ°(€€€€€€€‘•¥Í¥½¸èÍÑÈ°(€€€€€€€É…Ñ¥¹œè¥¹Ð°(€€€€€€€¹½Ñ•ÌèÍÑÈ°(€€€€€€€¥Í}™¥¹…°è‰½½°°(€€€€¤€´ø9½¹”è(€€€€€€€…±±½Ý•€ôì‰Õ¹‘•¥‘•ˆ°€‰…•ÁÑ•ˆ°€‰É•Ù¥Í¥½¸ˆ°€‰É•©•Ñ•ˆ°€‰™¥¹…°‰ô(€€€€€€€±•…¹}‘•¥Í¥½¸€ô±•…¹}Ñ•áÐ¡‘•¥Í¥½¸¤¹±½Ý•È ¤(€€€€€€€¥˜±•…¹}‘•¥Í¥½¸¹½Ð¥¸…±±½Ý•è(€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹šr«ž~—žjžîOšzs–Ïž¶[Žˆ¤(€€€€€€€Í…™•}É…Ñ¥¹œ€ô¥¹Ð¡É…Ñ¥¹œ¤(€€€€€€€¥˜¹½Ð€À€ðôÍ…™•}É…Ñ¥¹œ€ðô€Ôè(€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹žîOšzs¢¾–"–þ¦†ï–r €Àƒ–"À€Ôƒ’æ/¦^ÓŽˆ¤(€€€€€€€¹½Ü€ôÕÑ}¹½Ü ¤(€€€€€€€Ý¥Ñ Í•±˜¹½¹¹•Ð ¤…Ì½¹¹•Ñ¥½¸è(€€€€€€€€€€€½Ý¹•‘}ÉÕ¸€ô½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€Í•±˜¹}ÍÅ° ‰M1P¥I=4Á¥Á•±¥¹•}ÉÕ¹Ì]!I¥€ô€ü9½Ý¹•É}¥€ô€üˆ¤°(€€€€€€€€€€€€€€€€¡Á¥Á•±¥¹•}ÉÕ¹}¥°Í•±˜¹½Ý¹•É}¥¤°(€€€€€€€€€€€€¤¹™•Ñ¡½¹” ¤(€€€€€€€€€€€¥˜¹½Ð½Ý¹•‘}ÉÕ¸è(€€€€€€€€€€€€€€€É…¥Í”-•åÉÉ½È ‹¢þC¢†3¢ºÃ–öW’â7–¶c–r£Žˆ¤(€€€€€€€€€€€½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€Í•±˜¹}ÍÅ° (€€€€€€€€€€€€€€€€€€€€‰%9MIP%9Q<ÉÕ¹}É•Ù¥•ÝÌ€ˆ(€€€€€€€€€€€€€€€€€€€€ˆ¡½Ý¹•É}¥°Á¥Á•±¥¹•}ÉÕ¹}¥°‘•¥Í¥½¸°É…Ñ¥¹œ°¹½Ñ•Ì°¥Í}™¥¹…°°ÕÁ‘…Ñ•‘}…Ð¤€ˆ(€€€€€€€€€€€€€€€€€€€€‰Y1UL€ ü°€ü°€ü°€ü°€ü°€ü°€ü¤€ˆ(€€€€€€€€€€€€€€€€€€€€‰=8=91%P¡½Ý¹•É}¥°Á¥Á•±¥¹•}ÉÕ¹}¥¤<UAQMP€ˆ(€€€€€€€€€€€€€€€€€€€€‰‘•¥Í¥½¸€ô•á±Õ‘•¹‘•¥Í¥½¸°É…Ñ¥¹œ€ô•á±Õ‘•¹É…Ñ¥¹œ°¹½Ñ•Ì€ô•á±Õ‘•¹¹½Ñ•Ì°€ˆ(€€€€€€€€€€€€€€€€€€€€‰¥Í}™¥¹…°€ô•á±Õ‘•¹¥Í}™¥¹…°°ÕÁ‘…Ñ•‘}…Ð€ô•á±Õ‘•¹ÕÁ‘…Ñ•‘}…Ðˆ(€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€€ (€€€€€€€€€€€€€€€€€€€Í•±˜¹½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€Á¥Á•±¥¹•}ÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€±•…¹}‘•¥Í¥½¸°(€€€€€€€€€€€€€€€€€€€Í…™•}É…Ñ¥¹œ°(€€€€€€€€€€€€€€€€€€€±•…¹}Ñ•áÐ¡¹½Ñ•Ì¤°(€€€€€€€€€€€€€€€€€€€‰½½°¡¥Í}™¥¹…°¤°(€€€€€€€€€€€€€€€€€€€¹½Ü°(€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€¤((€€€‘•˜•Ñ}ÉÕ¹}É•Ù¥•Ü¡Í•±˜°Á¥Á•±¥¹•}ÉÕ¹}¥èÍÑÈ¤€´ø‘¥Ðð9½¹”è(€€€€€€€Ý¥Ñ Í•±˜¹½¹¹•Ð ¤…Ì½¹¹•Ñ¥½¸è(€€€€€€€€€€€É½Ü€ô½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€Í•±˜¹}ÍÅ° (€€€€€€€€€€€€€€€€€€€€‰M1P‘•¥Í¥½¸°É…Ñ¥¹œ°¹½Ñ•Ì°¥Í}™¥¹…°°ÕÁ‘…Ñ•‘}…ÐI=4ÉÕ¹}É•Ù¥•ÝÌ€ˆ(€€€€€€€€€€€€€€€€€€€€‰]!I½Ý¹•É}¥€ô€ü9Á¥Á•±¥¹•}ÉÕ¹}¥€ô€üˆ(€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€€¡Í•±˜¹½Ý¹•É}¥°Á¥Á•±¥¹•}ÉÕ¹}¥¤°(€€€€€€€€€€€€¤¹™•Ñ¡½¹” ¤(€€€€€€€É•ÑÕÉ¸‘¥Ð¡É½Ü¤¥˜É½Ü•±Í”9½¹”((€€€‘•˜}ÕÁÍ•ÉÑ}ÁÉ½‘ÕÐ¡Í•±˜°½¹¹•Ñ¥½¸è½‰©•Ð°¹…µ”èÍÑÈ°…Ñ•½ÉäèÍÑÈ°¹½ÜèÍÑÈ¤€´ø¥¹Ðè(€€€€€€€¥˜¹½Ð¹…µ”è(€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹’êŸ–N–B7žžÃ’â7¢÷’âëž¦ëŽˆ¤(€€€€€€€•á¥ÍÑ¥¹œ€ô½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€Í•±˜¹}ÍÅ° ‰M1P¥I=4ÁÉ½‘ÕÑÌ]!I½Ý¹•É}¥€ô€ü9¹…µ”€ô€üˆ¤°(€€€€€€€€€€€€¡Í•±˜¹½Ý¹•É}¥°¹…µ”¤°(€€€€€€€€¤¹™•Ñ¡½¹” ¤(€€€€€€€¥˜•á¥ÍÑ¥¹œè(€€€€€€€€€€€½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€Í•±˜¹}ÍÅ° ‰UAQÁÉ½‘ÕÑÌMP…Ñ•½Éä€ô€ü°ÕÁ‘…Ñ•‘}…Ð€ô€ü]!I¥€ô€ü9½Ý¹•É}¥€ô€üˆ¤°(€€€€€€€€€€€€€€€€¡…Ñ•½Éä°¹½Ü°¥¹Ð¡•á¥ÍÑ¥¹l‰¥‰t¤°Í•±˜¹½Ý¹•É}¥¤°(€€€€€€€€€€€€¤(€€€€€€€€€€€É•ÑÕÉ¸¥¹Ð¡•á¥ÍÑ¥¹l‰¥‰t¤(€€€€€€€ÕÉÍ½È€ô½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€Í•±˜¹}ÍÅ° (€€€€€€€€€€€€€€€€‰%9MIP%9Q<ÁÉ½‘ÕÑÌ€ˆ(€€€€€€€€€€€€€€€€ˆ¡½Ý¹•É}¥°¹…µ”°…Ñ•½Éä°‘•ÍÉ¥ÁÑ¥½¸°Ù¥Í¥‰¥±¥Ñä°É•…Ñ•‘}…Ð°ÕÁ‘…Ñ•‘}…Ð¤€ˆ(€€€€€€€€€€€€€€€€‰Y1UL€ ü°€ü°€ü°€œœ°€ÁÉ¥Ù…Ñ”œ°€ü°€ü¤ˆ(€€€€€€€€€€€€¤°(€€€€€€€€€€€€¡Í•±˜¹½Ý¹•É}¥°¹…µ”°…Ñ•½Éä°¹½Ü°¹½Ü¤°(€€€€€€€€¤(€€€€€€€É•ÑÕÉ¸Í•±˜¹}±…ÍÑ}¥¡½¹¹•Ñ¥½¸°ÕÉÍ½È¤((€€€‘•˜}Á¥Á•±¥¹•}™É½µ}É½Ü¡Í•±˜°É½Üè½‰©•Ð¤€´øA¥Á•±¥¹•IÕ¸è(€€€€€€€É•ÑÕÉ¸A¥Á•±¥¹•IÕ¸ (€€€€€€€€€€€¥õÍÑÈ¡É½Ýl‰¥‰t¤°(€€€€€€€€€€€Ñ…É•Ñ}ÁÉ½‘ÕÐõÍÑÈ¡É½Ýl‰Ñ…É•Ñ}ÁÉ½‘ÕÐ‰t¤°(€€€€€€€€€€€‘•µ…¹‘}Ñ•áÐõÍÑÈ¡É½Ýl‰‘•µ…¹‘}Ñ•áÐ‰t¤°(€€€€€€€€€€€ÁÉ½Ù¥‘•ÈõÍÑÈ¡É½Ýl‰ÁÉ½Ù¥‘•È‰t¤°(€€€€€€€€€€€µ½‘•°õÍÑÈ¡É½Ýl‰µ½‘•°‰t¤°(€€€€€€€€€€€¥µ…•}½Õ¹Ðõ¥¹Ð¡É½Ýl‰¥µ…•}½Õ¹Ð‰t¤°(€€€€€€€€€€€ÍÑ…ÑÕÌõIÕ¹MÑ…ÑÕÌ¡ÍÑÈ¡É½Ýl‰ÍÑ…ÑÕÌ‰t¤¤°(€€€€€€€€€€€ÕÉÉ•¹Ñ}ÍÑ…”õÍÑÈ¡É½Ýl‰ÕÉÉ•¹Ñ}ÍÑ…”‰t¤°(€€€€€€€€€€€É•…Ñ•‘}…ÐõÍÑÈ¡É½Ýl‰É•…Ñ•‘}…Ð‰t¤°(€€€€€€€€€€€ÕÁ‘…Ñ•‘}…ÐõÍÑÈ¡É½Ýl‰ÕÁ‘…Ñ•‘}…Ð‰t¤°(€€€€€€€€¤((€€€‘•˜}±…ÍÑ}¥¡Í•±˜°½¹¹•Ñ¥½¸è½‰©•Ð°ÕÉÍ½Èè½‰©•Ð¤€´ø¥¹Ðè(€€€€€€€¥˜Í•±˜¹¥Í}ÍÅ±¥Ñ”è(€€€€€€€€€€€É•ÑÕÉ¸¥¹Ð¡ÕÉÍ½È¹±…ÍÑÉ½Ý¥¤(€€€€€€€É•ÑÕÉ¸¥¹Ð¡½¹¹•Ñ¥½¸¹•á•ÕÑ” ‰M1P1MQY0 ¤L¥ˆ¤¹™•Ñ¡½¹” ¥l‰¥‰t¤((€€€‘•˜}ÍÅ°¡Í•±˜°ÍÑ…Ñ•µ•¹ÐèÍÑÈ¤€´øÍÑÈè(€€€€€€€É•ÑÕÉ¸ÍÑ…Ñ•µ•¹Ð¥˜Í•±˜¹¥Í}ÍÅ±¥Ñ”•±Í”ÍÑ…Ñ•µ•¹Ð¹É•Á±…” ˆüˆ°€ˆ•Ìˆ¤((€€€ÍÑ…Ñ¥µ•Ñ¡½(€€€‘•˜}½ÁÑ¥½¹…±}™±½…Ð¡Ù…±Õ”è½‰©•Ð¤€´ø™±½…Ðð9½¹”è(€€€€€€€Ñ•áÐ€ô±•…¹}Ñ•áÐ¡Ù…±Õ”¤(€€€€€€€¥˜¹½ÐÑ•áÐ½ÈÑ•áÐ¹±½Ý•È ¤€ôô€‰¹…¸ˆè(€€€€€€€€€€€É•ÑÕÉ¸9½¹”(€€€€€€€ÑÉäè(€€€€€€€€€€€É•ÑÕÉ¸™±½…Ð¡Ñ•áÐ¤(€€€€€€€•á•ÁÐ€¡QåÁ•ÉÉ½È°Y…±Õ•ÉÉ½È¤è(€€€€€€€€€€€É•ÑÕÉ¸9½¹”((€€€ÍÑ…Ñ¥µ•Ñ¡½(€€€‘•˜}ÍÅ±¥Ñ•}Í¡•µ„ ¤€´ø±¥ÍÑmÍÑÉtè(€€€€€€€É•ÑÕÉ¸l(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQLÁÉ½‘ÕÑÌ€ (€€€€€€€€€€€€€€€¥%9QHAI%5Id-dUQ=%9I59P°½Ý¹•É}¥QaP9=P9U10°¹…µ”QaP9=P9U10°(€€€€€€€€€€€€€€€…Ñ•½ÉäQaP9=P9U10U1P€œœ°‘•ÍÉ¥ÁÑ¥½¸QaP9=P9U10U1P€œœ°(€€€€€€€€€€€€€€€Ù¥Í¥‰¥±¥ÑäQaP9=P9U10U1P€ÁÉ¥Ù…Ñ”œ°É•…Ñ•‘}…ÐQaP9=P9U10°ÕÁ‘…Ñ•‘}…ÐQaP9=P9U10°(€€€€€€€€€€€€€€€U9%EU¡½Ý¹•É}¥°¹…µ”¤¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQL½µµ•¹Ñ}‰…Ñ¡•Ì€ (€€€€€€€€€€€€€€€¥%9QHAI%5Id-dUQ=%9I59P°½Ý¹•É}¥QaP9=P9U10°ÁÉ½‘ÕÑ}¥%9QH9=P9U10°(€€€€€€€€€€€€€€€Í½ÕÉ•}™¥±•¹…µ”QaP9=P9U10U1P€œœ°½µµ•¹Ñ}½Õ¹Ð%9QH9=P9U10U1P€À°(€€€€€€€€€€€€€€€É•…Ñ•‘}…ÐQaP9=P9U10°=I%8-d¡ÁÉ½‘ÕÑ}¥¤II9LÁÉ½‘ÕÑÌ¡¥¤=81QM¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQL½µµ•¹ÑÌ€ (€€€€€€€€€€€€€€€¥%9QHAI%5Id-dUQ=%9I59P°½Ý¹•É}¥QaP9=P9U10°ÁÉ½‘ÕÑ}¥%9QH9=P9U10°(€€€€€€€€€€€€€€€‰…Ñ¡}¥%9QH9=P9U10°½µµ•¹Ñ}½É¥¥¹…°QaP9=P9U10°±•…¹}½µµ•¹ÐQaP9=P9U10°(€€€€€€€€€€€€€€€™¥¹•ÉÁÉ¥¹ÐQaP9=P9U10°É•…Ñ•‘}…ÐQaP9=P9U10°É…Ñ¥¹œI0°(€€€€€€€€€€€€€€€½µµ•¹Ñ•‘}…ÐQaP9=P9U10U1P€œœ°ÁÉ½‘ÕÑ}Ù…É¥…¹ÐQaP9=P9U10U1P€œœ°(€€€€€€€€€€€€€€€Í½ÕÉ•}¡…¹¹•°QaP9=P9U10U1P€œœ°ÕÍ•É}Í•µ•¹ÐQaP9=P9U10U1P€œœ°(€€€€€€€€€€€€€€€=I%8-d¡ÁÉ½‘ÕÑ}¥¤II9LÁÉ½‘ÕÑÌ¡¥¤=81QM°(€€€€€€€€€€€€€€€=I%8-d¡‰…Ñ¡}¥¤II9L½µµ•¹Ñ}‰…Ñ¡•Ì¡¥¤=81QM°(€€€€€€€€€€€€€€€U9%EU¡½Ý¹•É}¥°ÁÉ½‘ÕÑ}¥°™¥¹•ÉÁÉ¥¹Ð¤¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQLÉ•ÅÕ¥É•µ•¹ÑÌ€ (€€€€€€€€€€€€€€€¥%9QHAI%5Id-dUQ=%9I59P°½Ý¹•É}¥QaP9=P9U10°ÁÉ½‘ÕÑ}¥%9QH9=P9U10°(€€€€€€€€€€€€€€€‰…Ñ¡}¥%9QH°Ñ¥Ñ±”QaP9=P9U10°‘•ÍÉ¥ÁÑ¥½¸QaP9=P9U10U1P€œœ°­•åÝ½É‘ÌQaP9=P9U10U1P€œœ°(€€€€€€€€€€€€€€€•Ù¥‘•¹•}Ñ•áÐQaP9=P9U10U1P€œœ°Í½É”I09=P9U10U1P€À°™¥¹•ÉÁÉ¥¹ÐQaP9=P9U10°(€€€€€€€€€€€€€€€É•…Ñ•‘}…ÐQaP9=P9U10°=I%8-d¡ÁÉ½‘ÕÑ}¥¤II9LÁÉ½‘ÕÑÌ¡¥¤=81QM°(€€€€€€€€€€€€€€€=I%8-d¡‰…Ñ¡}¥¤II9L½µµ•¹Ñ}‰…Ñ¡•Ì¡¥¤=81QMP9U10°(€€€€€€€€€€€€€€€U9%EU¡½Ý¹•É}¥°™¥¹•ÉÁÉ¥¹Ð¤¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQLÁ¥Á•±¥¹•}ÉÕ¹Ì€ (€€€€€€€€€€€€€€€¥QaPAI%5Id-d°½Ý¹•É}¥QaP9=P9U10°Ñ…É•Ñ}ÁÉ½‘ÕÐQaP9=P9U10°‘•µ…¹‘}Ñ•áÐQaP9=P9U10°(€€€€€€€€€€€€€€€ÁÉ½Ù¥‘•ÈQaP9=P9U10°µ½‘•°QaP9=P9U10°¥µ…•}½Õ¹Ð%9QH9=P9U10U1P€À°(€€€€€€€€€€€€€€€ÍÑ…ÑÕÌQaP9=P9U10°ÕÉÉ•¹Ñ}ÍÑ…”QaP9=P9U10U1P€œœ°¥‘•µÁ½Ñ•¹å}­•äQaP9=P9U10°(€€€€€€€€€€€€€€€•ÉÉ½É}ÍÕµµ…ÉäQaP9=P9U10U1P€œœ°É•…Ñ•‘}…ÐQaP9=P9U10°ÕÁ‘…Ñ•‘}…ÐQaP9=P9U10°(€€€€€€€€€€€€€€€U9%EU¡½Ý¹•É}¥°¥‘•µÁ½Ñ•¹å}­•ä¤¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQL•¹•É…Ñ¥½¹}ÉÕ¹Ì€ (€€€€€€€€€€€€€€€¥QaPAI%5Id-d°½Ý¹•É}¥QaP9=P9U10°Á¥Á•±¥¹•}ÉÕ¹}¥QaP°½¹Ñ•áÑ}©Í½¸QaP9=P9U10U1P€íôœ°(€€€€€€€€€€€€€€€É•ÍÕ±Ñ}©Í½¸QaP9=P9U10U1P€íôœ°ÅÕ…±¥Ñå}Í½É”I09=P9U10U1P€À°(€€€€€€€€€€€€€€€ÅÕ…±¥Ñå}ÍÑ…ÑÕÌQaP9=P9U10U1P€œœ°É•…Ñ•‘}…ÐQaP9=P9U10°(€€€€€€€€€€€€€€€=I%8-d¡Á¥Á•±¥¹•}ÉÕ¹}¥¤II9LÁ¥Á•±¥¹•}ÉÕ¹Ì¡¥¤=81QM°(€€€€€€€€€€€€€€€U9%EU¡½Ý¹•É}¥°Á¥Á•±¥¹•}ÉÕ¹}¥¤¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQLÍÑ…•}ÉÕ¹Ì€ (€€€€€€€€€€€€€€€¥QaPAI%5Id-d°½Ý¹•É}¥QaP9=P9U10°Á¥Á•±¥¹•}ÉÕ¹}¥QaP9=P9U10°ÍÑ…•}¥QaP9=P9U10°(€€€€€€€€€€€€€€€ÍÑ…ÑÕÌQaP9=P9U10°¥¹ÁÕÑ}¡…Í QaP9=P9U10U1P€œœ°•ÉÉ½É}ÍÕµµ…ÉäQaP9=P9U10U1P€œœ°(€€€€€€€€€€€€€€€ÍÑ…ÉÑ•‘}…ÐQaP°™¥¹¥Í¡•‘}…ÐQaP°U9%EU¡½Ý¹•É}¥°Á¥Á•±¥¹•}ÉÕ¹}¥°ÍÑ…•}¥¤°(€€€€€€€€€€€€€€€=I%8-d¡Á¥Á•±¥¹•}ÉÕ¹}¥¤II9LÁ¥Á•±¥¹•}ÉÕ¹Ì¡¥¤=81QM¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQL…ÉÑ¥™…ÑÌ€ (€€€€€€€€€€€€€€€¥QaPAI%5Id-d°½Ý¹•É}¥QaP9=P9U10°Á¥Á•±¥¹•}ÉÕ¹}¥QaP°­¥¹QaP9=P9U10°(€€€€€€€€€€€€€€€¹…µ”QaP9=P9U10°ÍÑ½É…•}Á…Ñ QaP9=P9U10°µ¥µ•}ÑåÁ”QaP9=P9U10U1P€œœ°Í¥é•}‰åÑ•Ì%9QH9=P9U10°(€€€€€€€€€€€€€€€Í¡„ÈÔØQaP9=P9U10°É•…Ñ•‘}…ÐQaP9=P9U10°U9%EU¡½Ý¹•É}¥°ÍÑ½É…•}Á…Ñ ¤°(€€€€€€€€€€€€€€€=I%8-d¡Á¥Á•±¥¹•}ÉÕ¹}¥¤II9LÁ¥Á•±¥¹•}ÉÕ¹Ì¡¥¤=81QM¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQL…ÉÑ¥™…Ñ}‰±½‰Ì€ (€€€€€€€€€€€€€€€½Ý¹•É}¥QaP9=P9U10°ÍÑ½É…•}Á…Ñ QaP9=P9U10°‘…Ñ„	1=9=P9U10°(€€€€€€€€€€€€€€€µ¥µ•}ÑåÁ”QaP9=P9U10U1P€œœ°Í¥é•}‰åÑ•Ì%9QH9=P9U10°(€€€€€€€€€€€€€€€Í¡„ÈÔØQaP9=P9U10°É•…Ñ•‘}…ÐQaP9=P9U10°(€€€€€€€€€€€€€€€AI%5Id-d¡½Ý¹•É}¥°ÍÑ½É…•}Á…Ñ ¤¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQLµ¥É…Ñ¥½¹}±•‘•È€ (€€€€€€€€€€€€€€€¥%9QHAI%5Id-dUQ=%9I59P°½Ý¹•É}¥QaP9=P9U10°Í½ÕÉ•}ÑåÁ”QaP9=P9U10°(€€€€€€€€€€€€€€€Í½ÕÉ•}¥QaP9=P9U10°Ñ…É•Ñ}ÑåÁ”QaP9=P9U10°Ñ…É•Ñ}¥QaP9=P9U10°Í¡„ÈÔØQaP9=P9U10U1P€œœ°(€€€€€€€€€€€€€€€µ¥É…Ñ•‘}…ÐQaP9=P9U10°U9%EU¡½Ý¹•É}¥°Í½ÕÉ•}ÑåÁ”°Í½ÕÉ•}¥°Í¡„ÈÔØ¤¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQL±½¥¹}…Õ‘¥Ð€ (€€€€€€€€€€€€€€€¥%9QHAI%5Id-dUQ=%9I59P°½Ý¹•É}¥QaP9=P9U10°Í•ÍÍ¥½¹}™¥¹•ÉÁÉ¥¹ÐQaP9=P9U10°(€€€€€€€€€€€€€€€½ÕÑ½µ”QaP9=P9U10°É•…Ñ•‘}…ÐQaP9=P9U10¤ˆˆˆ°(€€€€€€€€€€€€ˆˆ‰IQQ	1%9=Pa%MQLÉÕ¹}É•Ù¥•ÝÌ€ (€€€€€€€€€€€€€€€½Ý¹•É}¥QaP9=P9U10°Á¥Á•±¥¹•}ÉÕ¹}¥QaP9=P9U10°‘•¥Í¥½¸QaP9=P9U10U1P€Õ¹‘•¥‘•œ°(€€€€€€€€€€€€€€€É…Ñ¥¹œ%9QH9=P9U10U1P€À!,¡É…Ñ¥¹œ	Q]8€À9€Ô¤°¹½Ñ•ÌQaP9=P9U10U1P€œœ°(€€€€€€€€€€€€€€€¥Í}™¥¹…°%9QH9=P9U10U1P€À°ÕÁ‘…Ñ•‘}…ÐQaP9=P9U10°(€€€€€€€€€€€€€€€AI%5Id-d¡½Ý¹•É}¥°Á¥Á•±¥¹•}ÉÕ¹}¥¤°(€€€€€€€€€€€€€€€=I%8-d¡Á¥Á•±¥¹•}ÉÕ¹}¥¤II9LÁ¥Á•±¥¹•}ÉÕ¹Ì¡¥¤=81QM¤ˆˆˆ°(€€€€€€€t(
