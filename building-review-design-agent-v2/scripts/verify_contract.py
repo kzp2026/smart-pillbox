@@ -149,6 +149,9 @@ def verify_static(root: Path) -> list[str]:
         "结果决策",
         "对比两个版本",
         "最大付费调用数量",
+        "DEMAND_DRAFT_KEY",
+        "_demand_selectbox",
+        "完整套图默认 8 张",
         "重新连接私有服务",
     ):
         if marker not in app_source:

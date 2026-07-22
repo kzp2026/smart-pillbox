@@ -91,6 +91,16 @@ class ThemeTests(unittest.TestCase):
             self.assertIn(selector, css)
         self.assertIn("background: #081a38 !important", css)
 
+    def test_text_inputs_use_a_high_contrast_caret(self) -> None:
+        css = build_theme_css(
+            {
+                "background": "data:image/png;base64,background",
+                "logo": "data:image/png;base64,logo",
+            }
+        )
+
+        self.assertIn("caret-color: #f2f8ff !important", css)
+
     def test_runtime_theme_assets_use_small_webp_payloads(self) -> None:
         assets = default_asset_urls()
 

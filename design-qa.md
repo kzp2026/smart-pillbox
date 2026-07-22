@@ -147,3 +147,21 @@ The reference and final desktop capture were reviewed together in one comparison
 - Nested label text and disclosure icons inherit the dark-theme foreground color.
 - The regression test covers default, hover and icon selectors so future Streamlit theme changes cannot silently restore a white header.
 - Theme tests: 7 passed. Repository full suite: 169 passed. Original-site freeze: passed.
+
+---
+
+# V2 Demand Workflow Persistence QA — 2026-07-22
+
+**Local journey result: PASSED**
+
+## Evidence
+
+- User-reported state-loss screen: `C:/Users/15854/AppData/Local/Temp/codex-clipboard-4fc2cbb5-f5e0-424e-8b23-4910a0e2eb3a.png`
+- AppTest journey: enter product and requirement → switch to overview → return to demand → generate a zero-image run → open Design and Prompt pages.
+
+## Checks
+
+- Product name, requirement, eight industrial-design constraints, selected provider/model and image count are copied into a durable session draft whenever the input changes, then restored when the page remounts.
+- A confirmed run is selected before the text or image call starts. If image generation fails, the saved design text and Prompt remain available as a partial run.
+- The default paid delivery is eight distinct tasks: product render ×2, exploded view, detail view, orthographic three-view, design board and usage scene ×2. Every paid run still requires the existing explicit confirmation.
+- Text inputs and textareas now use a high-contrast white caret on the dark canvas.

@@ -79,13 +79,27 @@ class AppStructureTests(unittest.TestCase):
         self.assertIn("打开数据分析", source)
         self.assertIn("打开效果图", source)
 
-    def test_paid_image_generation_defaults_to_one_image(self) -> None:
+    def test_paid_image_generation_defaults_to_full_visual_delivery(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
         start = source.index("def _render_demand(")
         end = source.index("\ndef _render_artifact(", start)
 
-        self.assertIn('"效果图数量", min_value=0, max_value=8, value=1', source[start:end])
+        self.assertIn('"效果图数量",\n            "image_count",\n            8,', source[start:end])
+        self.assertIn("完整套图默认 8 张", source[start:end])
         self.assertIn("最大付费调用数量", source[start:end])
+
+    def test_demand_draft_survives_page_switches_and_defaults_to_full_visual_delivery(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+        start = source.index("def _render_demand(")
+        end = source.index("\ndef _render_artifact(", start)
+        demand_source = source[start:end]
+
+        self.assertIn("v2_demand_draft", source)
+        self.assertIn("_v2_demand_", source)
+        self.assertIn("完整套图默认 8 张", demand_source)
+        self.assertIn("_demand_selectbox", demand_source)
+        self.assertIn("_set_active_product(st_module, command.target_product)", demand_source)
+        self.assertIn("v2_current_run_id\"] = run.id", demand_source)
 
     def test_initialization_failure_has_safe_recovery_actions(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
@@ -191,6 +205,39 @@ class AppStructureTests(unittest.TestCase):
             mobile_navigation = next(item for item in app.selectbox if item.label == "移动端导航")
             self.assertEqual(tuple(mobile_navigation.options), NAV_ITEMS)
             self.assertTrue(any("知识库概览" in item.value for item in app.markdown))
+
+    def test_demand_draft_and_generated_results_survive_navigation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = self._logged_in_app(Path(temp_dir) / "private.sqlite3")
+            navigation = next(item for item in app.sidebar.radio if item.label == "工作台导航")
+            navigation.set_value("需求生成").run()
+
+            self.assertFalse(next(item for item in app.selectbox if item.label == "图片供应商").disabled)
+            self.assertFalse(next(item for item in app.selectbox if item.label == "图片模型").disabled)
+
+            next(item for item in app.text_input if item.label == "目标产品").input("持久化验证产品")
+            next(item for item in app.text_area if item.label == "本次设计需求").input("验证切换页面后内容保留，并生成可查看的设计结果。").run()
+            next(item for item in app.number_input if item.label == "效果图数量").set_value(0).run()
+
+            navigation.set_value("知识库概览").run()
+            navigation.set_value("需求生成").run()
+            self.assertEqual(
+                next(item for item in app.text_input if item.label == "目标产品").value,
+                "持久化验证产品",
+            )
+            self.assertEqual(
+                next(item for item in app.text_area if item.label == "本次设计需求").value,
+                "验证切换页面后内容保留，并生成可查看的设计结果。",
+            )
+
+            next(item for item in app.button if item.label == "生成任务预览").click().run()
+            next(item for item in app.button if item.label == "确认并开始生成").click().run()
+            self.assertEqual([], list(app.exception))
+
+            navigation.set_value("设计方案").run()
+            self.assertTrue(any("持久化验证产品" in item.value for item in app.markdown))
+            navigation.set_value("工业设计 Prompt").run()
+            self.assertTrue(any("统一产品设计锁定" in item.value for item in app.code))
 
     def test_every_navigation_page_renders_without_private_data(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -531,6 +531,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 
 input, textarea, [data-baseweb="select"] > div {{
   color: #f2f8ff !important;
+  caret-color: #f2f8ff !important;
   background: #06152e !important;
   border-color: rgba(90, 139, 203, 0.42) !important;
 }}

@@ -36,7 +36,7 @@ from v2.application.runtime_state import (
 )
 from v2.auth import LoginGuard, SessionClock
 from v2.config import AppConfig, ConfigError
-from v2.domain.models import ArtifactKind, CreateRunCommand
+from v2.domain.models import ArtifactKind, CreateRunCommand, RunStatus
 from v2.pipeline.catalog import LEGACY_STAGES
 from v2.pipeline.runner import PipelineRunner, SubprocessStageExecutor
 from v2.providers.images import ExistingImageProvider
@@ -66,6 +66,8 @@ STAGE_NAV_ITEMS = (
 )
 NAV_ITEMS = STAGE_NAV_ITEMS + ("历史记录", "设置与迁移")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+DEMAND_DRAFT_KEY = "v2_demand_draft"
+DEMAND_WIDGET_PREFIX = "_v2_demand_"
 
 @dataclass(frozen=True)
 class _WorkspaceView:
@@ -479,6 +481,93 @@ def _navigate_to(st_module: object, target: str) -> None:
     st_module.rerun()
 
 
+def _demand_draft(st_module: object) -> dict[str, object]:
+    """Keep form values in durable session state while page widgets are unmounted."""
+    draft = st_module.session_state.get(DEMAND_DRAFT_KEY)
+    if not isinstance(draft, dict):
+        draft = {}
+        st_module.session_state[DEMAND_DRAFT_KEY] = draft
+    return draft
+
+
+def _demand_widget_key(field: str) -> str:
+    return f"{DEMAND_WIDGET_PREFIX}{field}"
+
+
+def _sync_demand_field(st_module: object, field: str) -> None:
+    draft = _demand_draft(st_module)
+    key = _demand_widget_key(field)
+    if key in st_module.session_state:
+        draft[field] = st_module.session_state[key]
+
+
+def _seed_demand_widget(st_module: object, field: str, default: object) -> str:
+    key = _demand_widget_key(field)
+    if key not in st_module.session_state:
+        st_module.session_state[key] = _demand_draft(st_module).get(field, default)
+    return key
+
+
+def _demand_text_input(st_module: object, label: str, field: str, default: str = "", **kwargs: object) -> str:
+    key = _seed_demand_widget(st_module, field, default)
+    return str(
+        st_module.text_input(
+            label,
+            key=key,
+            on_change=_sync_demand_field,
+            args=(st_module, field),
+            **kwargs,
+        )
+    )
+
+
+def _demand_text_area(st_module: object, label: str, field: str, default: str = "", **kwargs: object) -> str:
+    key = _seed_demand_widget(st_module, field, default)
+    return str(
+        st_module.text_area(
+            label,
+            key=key,
+            on_change=_sync_demand_field,
+            args=(st_module, field),
+            **kwargs,
+        )
+    )
+
+
+def _demand_number_input(st_module: object, label: str, field: str, default: int, **kwargs: object) -> int:
+    key = _seed_demand_widget(st_module, field, default)
+    return int(
+        st_module.number_input(
+            label,
+            key=key,
+            on_change=_sync_demand_field,
+            args=(st_module, field),
+            **kwargs,
+        )
+    )
+
+
+def _demand_selectbox(st_module: object, label: str, field: str, options: list[str]) -> str:
+    if not options:
+        raise ValueError("图片生成配置缺少可用选项。")
+    draft = _demand_draft(st_module)
+    selected = str(draft.get(field) or options[0])
+    if selected not in options:
+        selected = options[0]
+    key = _demand_widget_key(field)
+    if key not in st_module.session_state:
+        st_module.session_state[key] = selected
+    return str(
+        st_module.selectbox(
+            label,
+            options,
+            key=key,
+            on_change=_sync_demand_field,
+            args=(st_module, field),
+        )
+    )
+
+
 def _current_detail(
     st_module: object,
     history: HistoryService,
@@ -816,15 +905,15 @@ def _render_import(
 def _constraint_inputs(st_module: object) -> dict[str, str]:
     first, second = st_module.columns(2)
     with first:
-        product_type = st_module.text_input("产品类型", placeholder="桌面智能硬件")
-        target_users = st_module.text_input("目标用户", placeholder="老年用户及家庭照护者")
-        core_functions = st_module.text_area("核心功能", placeholder="定时提醒、分格收纳、状态反馈")
-        structure = st_module.text_area("结构锁定", placeholder="透明翻盖、独立分格、前置交互区")
+        product_type = _demand_text_input(st_module, "产品类型", "product_type", placeholder="桌面智能硬件")
+        target_users = _demand_text_input(st_module, "目标用户", "target_users", placeholder="老年用户及家庭照护者")
+        core_functions = _demand_text_area(st_module, "核心功能", "core_functions", placeholder="定时提醒、分格收纳、状态反馈")
+        structure = _demand_text_area(st_module, "结构锁定", "structure", placeholder="透明翻盖、独立分格、前置交互区")
     with second:
-        materials = st_module.text_input("材料与工艺", placeholder="食品级 ABS、透明 PC、硅胶密封")
-        colors = st_module.text_input("颜色与 CMF", placeholder="暖白主体、低饱和蓝色强调")
-        dimensions = st_module.text_input("尺寸与比例", placeholder="紧凑桌面尺寸，适合单手操作")
-        forbidden = st_module.text_area("禁止修改项", placeholder="不得改变核心分格数量和主要交互位置")
+        materials = _demand_text_input(st_module, "材料与工艺", "materials", placeholder="食品级 ABS、透明 PC、硅胶密封")
+        colors = _demand_text_input(st_module, "颜色与 CMF", "colors", placeholder="暖白主体、低饱和蓝色强调")
+        dimensions = _demand_text_input(st_module, "尺寸与比例", "dimensions", placeholder="紧凑桌面尺寸，适合单手操作")
+        forbidden = _demand_text_area(st_module, "禁止修改项", "forbidden_changes", placeholder="不得改变核心分格数量和主要交互位置")
     return {
         "product_type": product_type,
         "target_users": target_users,
@@ -878,15 +967,18 @@ def _render_demand(
     store: object,
 ) -> None:
     st_module.markdown("### 需求生成与设计任务")
-    if "v2_target_product" not in st_module.session_state:
-        st_module.session_state["v2_target_product"] = _active_product(st_module)
-    target_product = st_module.text_input(
+    _demand_draft(st_module)
+    target_product = _demand_text_input(
+        st_module,
         "目标产品",
+        "target_product",
+        default=_active_product(st_module),
         placeholder="填写新产品名称；历史结果会按该产品隔离",
-        key="v2_target_product",
     )
-    demand_text = st_module.text_area(
+    demand_text = _demand_text_area(
+        st_module,
         "本次设计需求",
+        "demand_text",
         placeholder="例如：强化提醒感知与防潮能力，同时保持适老化易用性。",
         height=110,
     )
@@ -894,18 +986,33 @@ def _render_demand(
         constraints = _constraint_inputs(st_module)
     model_col, count_col = st_module.columns(2)
     with model_col:
-        provider = st_module.selectbox(
-            "图片供应商", [config.image_provider], disabled=True
+        provider = _demand_selectbox(
+            st_module,
+            "图片供应商",
+            "image_provider",
+            [config.image_provider.strip() or "dashscope"],
         )
-        model = st_module.text_input("图片模型", value=config.image_model, disabled=True)
+        model = _demand_selectbox(
+            st_module,
+            "图片模型",
+            "image_model",
+            [config.image_model.strip() or "wan2.7-image-pro"],
+        )
     with count_col:
-        image_count = st_module.number_input(
-            "效果图数量", min_value=0, max_value=8, value=1, step=1
+        image_count = _demand_number_input(
+            st_module,
+            "效果图数量",
+            "image_count",
+            8,
+            min_value=0,
+            max_value=8,
+            step=1,
         )
         st_module.caption(
             f"最大付费调用数量：{int(image_count)} 张；实际费用以百炼账单为准。"
             "0 张仅生成设计方案和 Prompt。"
         )
+        st_module.caption("完整套图默认 8 张：产品效果图×2、爆炸图、细节图、三视图、设计展板、使用场景×2。")
 
     if st_module.button("生成任务预览", icon=":material/preview:", type="primary"):
         if not target_product.strip() or not demand_text.strip():
@@ -913,6 +1020,15 @@ def _render_demand(
         elif int(image_count) > 0 and not config.image_api_key:
             st_module.error("尚未配置图像服务密钥。可将效果图数量设为 0，先生成完整文字方案。")
         else:
+            _demand_draft(st_module).update(
+                {
+                    "target_product": target_product,
+                    "demand_text": demand_text,
+                    "image_provider": provider,
+                    "image_model": model,
+                    "image_count": int(image_count),
+                }
+            )
             command = GenerationCommand(
                 target_product.strip(),
                 demand_text.strip(),
@@ -945,14 +1061,25 @@ def _render_demand(
             service, text_provider = _generation_services(config, repository)
             provided_token = preview.confirmation_token if confirmed else None
             run = service.confirm_and_start(command, preview, provided_token)
+            _set_active_product(st_module, command.target_product)
+            st_module.session_state["v2_current_run_id"] = run.id
             _invalidate_view_cache(repository)
-            with st_module.spinner("正在检索私有证据并生成设计方案……"):
-                generated = service.generate_design(
-                    run.id,
-                    command,
-                    st_module.session_state.get("v2_generation_constraints", {}),
-                    text_provider,
+            try:
+                repository.update_pipeline_run(run.id, RunStatus.RUNNING, current_stage="08")
+                with st_module.spinner("正在检索私有证据并生成设计方案……"):
+                    generated = service.generate_design(
+                        run.id,
+                        command,
+                        st_module.session_state.get("v2_generation_constraints", {}),
+                        text_provider,
+                    )
+            except Exception as exc:
+                repository.update_pipeline_run(run.id, RunStatus.FAILED, current_stage="08")
+                _invalidate_view_cache(repository)
+                st_module.error(
+                    public_error_message("设计方案生成失败", exc, guidance="已保留本次任务，可在确认服务配置后重试。")
                 )
+                return
             if command.image_count:
                 provider_client = ExistingImageProvider(_image_provider_config(config))
                 progress_bar = st_module.progress(0, text="准备调用百炼效果图服务……")
@@ -964,24 +1091,33 @@ def _render_demand(
                         text=f"{label}：{state}（{completed}/{total}）",
                     )
 
-                with st_module.spinner(f"正在生成 {command.image_count} 张效果图……"):
-                    report = ImageGenerationService(repository, store, provider_client).generate(
-                        run.id,
-                        list(generated.package.get("visual_assets") or []),
-                        command.image_count,
-                        on_progress=update_image_progress,
+                try:
+                    with st_module.spinner(f"正在生成 {command.image_count} 张效果图……"):
+                        report = ImageGenerationService(repository, store, provider_client).generate(
+                            run.id,
+                            list(generated.package.get("visual_assets") or []),
+                            command.image_count,
+                            on_progress=update_image_progress,
+                        )
+                except Exception as exc:
+                    repository.update_pipeline_run(run.id, RunStatus.PARTIAL, current_stage="09")
+                    _invalidate_view_cache(repository)
+                    progress_bar.empty()
+                    st_module.warning(
+                        public_error_message("效果图生成未完成", exc, guidance="设计方案与 Prompt 已保存，可在 AI 效果图页面重试。")
                     )
+                    report = None
                 progress_bar.empty()
-                if report.failures:
+                if report and report.failures:
                     st_module.warning(
                         f"已成功保存 {report.succeeded_count}/{report.requested_count} 张；失败项已保留诊断。"
                     )
-                else:
+                elif report:
                     st_module.success(f"已生成并归档 {report.succeeded_count} 张效果图。")
             else:
+                repository.update_pipeline_run(run.id, RunStatus.SUCCEEDED, current_stage="08")
                 st_module.success("设计方案与工业设计 Prompt 已生成。")
-            st_module.session_state["v2_current_run_id"] = run.id
-            _set_active_product(st_module, command.target_product)
+            st_module.session_state["v2_generation_last_run"] = run.id
             st_module.session_state["v2_current_run_id"] = run.id
             _invalidate_view_cache(repository)
             st_module.session_state.pop("v2_generation_preview", None)
