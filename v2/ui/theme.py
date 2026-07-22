@@ -418,6 +418,29 @@ h1 {{
   border-radius: 12px !important;
 }}
 
+[data-testid="stExpander"] details > summary {{
+  color: var(--v2-text) !important;
+  background: #081a38 !important;
+  border-radius: 11px !important;
+}}
+
+[data-testid="stExpander"] details[open] > summary {{
+  border-bottom: 1px solid var(--v2-line) !important;
+  border-radius: 11px 11px 0 0 !important;
+}}
+
+[data-testid="stExpander"] details > summary:hover {{
+  color: #ffffff !important;
+  background: #0a2a54 !important;
+}}
+
+[data-testid="stExpander"] details > summary p,
+[data-testid="stExpander"] details > summary span,
+[data-testid="stExpander"] details > summary svg {{
+  color: inherit !important;
+  fill: currentColor !important;
+}}
+
 [data-testid="stMetric"] {{
   padding: 12px;
   background: rgba(7, 25, 53, 0.9);
