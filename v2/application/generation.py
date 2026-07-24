@@ -111,6 +111,11 @@ class GenerationService:
             context,
             industrial_constraints=dict(industrial_constraints),
         )
+        package["requirement_function_structure_graph"] = self._build_graph_snapshot(
+            command.demand_text,
+            context,
+            industrial_constraints,
+        )
         text_result = text_provider.generate(
             TextGenerationRequest(
                 system_prompt=(
@@ -144,6 +149,76 @@ class GenerationService:
             context=safe_context,
             package=safe_package,
         )
+
+    @staticmethod
+    def _build_graph_snapshot(
+        demand_text: str,
+        context: Mapping[str, object],
+        industrial_constraints: Mapping[str, object],
+    ) -> dict[str, list[dict[str, str]]]:
+        """Persist a lightweight graph even when the legacy pipeline is not run."""
+
+        requirements: list[dict[str, str]] = []
+        for item in list(context.get("requirements") or []):
+            if not isinstance(item, Mapping):
+                continue
+            title = str(item.get("title") or item.get("name") or "").strip()
+            detail = str(item.get("description") or item.get("evidence_text") or "").strip()
+            if title:
+                requirements.append({"name": title, "detail": detail or title})
+        if not requirements:
+            requirements.append({"name": "本次设计需求", "detail": demand_text.strip()})
+
+        functions = [
+            {"name": value, "source": "工业设计约束"}
+            for value in GenerationService._split_graph_terms(
+                industrial_constraints.get("core_functions")
+            )
+        ]
+        if not functions:
+            functions.append({"name": "围绕需求的核心交互与服务功能", "source": "本次设计需求"})
+
+        structures = [
+            {"name": value, "source": "工业设计约束"}
+            for value in GenerationService._split_graph_terms(industrial_constraints.get("structure"))
+        ]
+        if not structures:
+            product_type = str(industrial_constraints.get("product_type") or "").strip()
+            structures.append(
+                {
+                    "name": product_type or "模块化主体、交互区与功能组件",
+                    "source": "本次设计需求",
+                }
+            )
+
+        links = [
+            {
+                "requirement": item["name"],
+                "function": functions[index % len(functions)]["name"],
+                "structure": structures[index % len(structures)]["name"],
+            }
+            for index, item in enumerate(requirements)
+        ]
+        return {
+            "requirements": requirements,
+            "functions": functions,
+            "structures": structures,
+            "links": links,
+        }
+
+    @staticmethod
+    def _split_graph_terms(value: object) -> list[str]:
+        raw = str(value or "").replace("\n", "、")
+        for delimiter in ("；", ";", "，", ",", "。", "、", "/"):
+            raw = raw.replace(delimiter, "|")
+        seen: set[str] = set()
+        values: list[str] = []
+        for item in raw.split("|"):
+            clean = item.strip(" -：:")
+            if clean and clean not in seen:
+                seen.add(clean)
+                values.append(clean)
+        return values[:6]
 
     @staticmethod
     def _canonical(command: GenerationCommand, nonce: str) -> bytes:

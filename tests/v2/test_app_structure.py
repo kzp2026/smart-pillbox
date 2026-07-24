@@ -60,6 +60,15 @@ class AppStructureTests(unittest.TestCase):
         self.assertIn("加载效果图预览", render_images_source)
         self.assertIn('data_mime_prefixes=("image/",)', render_images_source)
 
+    def test_graph_and_design_pages_do_not_preload_archived_artifact_bytes(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+        graph_start = source.index("def _render_graph(")
+        design_start = source.index("def _render_design(")
+        prompt_start = source.index("def _render_prompt(")
+
+        self.assertIn("include_data=False", source[graph_start:design_start])
+        self.assertIn("include_data=False", source[design_start:prompt_start])
+
     def test_overview_results_are_scoped_to_the_active_product(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
         start = source.index("def _render_overview(")
@@ -143,6 +152,12 @@ class AppStructureTests(unittest.TestCase):
         }
 
         self.assertNotIn("WorkspaceSnapshot", imported_names)
+
+    def test_image_job_registry_has_a_hot_reload_safe_runtime_fallback(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("IMAGE_JOB_REGISTRY as _IMAGE_JOB_REGISTRY", source)
+        self.assertIn("getattr(_runtime_state, \"IMAGE_JOB_REGISTRY\"", source)
 
     def _logged_in_app(self, database: Path) -> AppTest:
         app = AppTest.from_file(
@@ -238,6 +253,8 @@ class AppStructureTests(unittest.TestCase):
             self.assertTrue(any("持久化验证产品" in item.value for item in app.markdown))
             navigation.set_value("工业设计 Prompt").run()
             self.assertTrue(any("统一产品设计锁定" in item.value for item in app.code))
+            navigation.set_value("需求-功能-结构图谱").run()
+            self.assertTrue(any("本次已生成图谱" in item.value for item in app.markdown))
 
     def test_every_navigation_page_renders_without_private_data(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

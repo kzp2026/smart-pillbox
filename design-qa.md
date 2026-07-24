@@ -57,6 +57,13 @@ final result: passed
 
 # V2 Design QA
 
+## 2026-07-23 · Navigation, graph and background-image QA
+
+- AI image calls now start in a process-local background job; the page returns immediately with queued/progress status instead of waiting for each provider poll. The regression test verifies job submission returns in under 0.2 seconds.
+- AI Images, graph and design pages no longer preload artifact bytes. Image bytes remain behind the existing preview action; graph/design archives require explicit load.
+- Every newly generated text package persists a requirement → function → structure snapshot. Historical runs without the snapshot receive a compatible read-only view from their saved demand and constraints.
+- Navigation avoids the unneeded global workspace query outside the overview page. Local V2 regression suite: 107 passed.
+
 **Final result: PASSED**
 
 ## Visual source

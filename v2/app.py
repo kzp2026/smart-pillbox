@@ -26,8 +26,10 @@ from v2.application.artifacts import ArchiveLimits, UnsafeArchive, extract_archi
 from v2.application.generation import GenerationCommand, GenerationService
 from v2.application.history import HistoryService, RunDetail
 from v2.application.image_generation import ImageGenerationService
+from v2.application.image_jobs import ImageJobRegistry
 from v2.application.imports import ImportService
 from v2.application.migration import MigrationService
+from v2.application import runtime_state as _runtime_state
 from v2.application.runtime_state import (
     LOGIN_GUARDS as _LOGIN_GUARDS,
     REPOSITORIES as _REPOSITORIES,
@@ -53,6 +55,12 @@ from v2.ui.components import (
 )
 from v2.ui.errors import public_error_message
 from v2.ui.theme import inject_theme
+
+
+_IMAGE_JOB_REGISTRY = getattr(_runtime_state, "IMAGE_JOB_REGISTRY", None)
+if _IMAGE_JOB_REGISTRY is None:
+    _IMAGE_JOB_REGISTRY = ImageJobRegistry()
+    setattr(_runtime_state, "IMAGE_JOB_REGISTRY", _IMAGE_JOB_REGISTRY)
 
 
 STAGE_NAV_ITEMS = (
@@ -960,6 +968,106 @@ def _generation_services(config: AppConfig, repository: KnowledgeRepository):
     )
 
 
+def _image_job_key(repository: KnowledgeRepository, run_id: str) -> tuple[str, str]:
+    return (_repository_scope(repository), str(run_id))
+
+
+def _schedule_image_generation(
+    config: AppConfig,
+    repository: KnowledgeRepository,
+    store: object,
+    run_id: str,
+    visual_assets: list[Mapping[str, object]],
+    count: int,
+) -> bool:
+    """Start paid image work outside Streamlit's rerun thread.
+
+    The database remains the source of truth.  The in-memory registry only makes
+    the current process responsive while the provider polls for completed images.
+    """
+
+    repository.update_pipeline_run(run_id, RunStatus.RUNNING, current_stage="09")
+
+    def work(progress: Callable[[int, int, str, bool], None]) -> object:
+        try:
+            report = ImageGenerationService(
+                repository,
+                store,
+                ExistingImageProvider(_image_provider_config(config)),
+            ).generate(run_id, visual_assets, count, on_progress=progress)
+        except Exception:
+            try:
+                repository.record_stage_run(
+                    run_id,
+                    "09",
+                    RunStatus.FAILED,
+                    error_summary="图像后台任务异常，请重新生成。",
+                )
+            except Exception:
+                pass
+            repository.update_pipeline_run(
+                run_id,
+                RunStatus.FAILED,
+                current_stage="09",
+                error_summary="图像后台任务异常，请重新生成。",
+            )
+            _invalidate_view_cache(repository)
+            raise
+        _invalidate_view_cache(repository)
+        return report
+
+    try:
+        return _IMAGE_JOB_REGISTRY.start(
+            _image_job_key(repository, run_id),
+            max(0, int(count)),
+            work,
+        )
+    except Exception:
+        repository.update_pipeline_run(
+            run_id,
+            RunStatus.FAILED,
+            current_stage="09",
+            error_summary="图像后台任务未能启动，请重新生成。",
+        )
+        _invalidate_view_cache(repository)
+        raise
+
+
+def _render_image_job_status(
+    st_module: object,
+    repository: KnowledgeRepository,
+    run: object,
+) -> None:
+    snapshot = _IMAGE_JOB_REGISTRY.snapshot(_image_job_key(repository, run.id))
+    if snapshot is None:
+        if run.status == RunStatus.RUNNING:
+            st_module.warning(
+                "该图像任务来自之前的服务进程，当前没有可继续读取的后台执行器。"
+                "文字方案和 Prompt 已保留；可在下方确认后重新生成。"
+            )
+        return
+    if snapshot.status == "running":
+        total = max(snapshot.total, 1)
+        st_module.info(
+            f"效果图正在后台生成：{snapshot.completed}/{snapshot.total}。"
+            "可立即切换页面，任务不会阻塞界面。"
+        )
+        st_module.progress(
+            min(snapshot.completed / total, 1.0),
+            text=(f"当前：{snapshot.last_label}" if snapshot.last_label else "已提交到图像服务，等待首张完成"),
+        )
+        if st_module.button("刷新后台任务状态", key=f"v2_refresh_image_job_{run.id}"):
+            _invalidate_view_cache(repository)
+            st_module.rerun()
+    elif snapshot.status == "partial":
+        st_module.warning(
+            f"后台任务已结束，成功 {snapshot.succeeded}/{snapshot.total} 张；"
+            "失败项可在下方重新生成。"
+        )
+    elif snapshot.status == "failed":
+        st_module.warning(snapshot.error or "后台图像任务失败，可在下方重新生成。")
+
+
 def _render_demand(
     st_module: object,
     config: AppConfig,
@@ -1081,39 +1189,28 @@ def _render_demand(
                 )
                 return
             if command.image_count:
-                provider_client = ExistingImageProvider(_image_provider_config(config))
-                progress_bar = st_module.progress(0, text="准备调用百炼效果图服务……")
-
-                def update_image_progress(completed: int, total: int, label: str, succeeded: bool) -> None:
-                    state = "已保存" if succeeded else "失败并已记录"
-                    progress_bar.progress(
-                        completed / max(total, 1),
-                        text=f"{label}：{state}（{completed}/{total}）",
-                    )
-
                 try:
-                    with st_module.spinner(f"正在生成 {command.image_count} 张效果图……"):
-                        report = ImageGenerationService(repository, store, provider_client).generate(
-                            run.id,
-                            list(generated.package.get("visual_assets") or []),
-                            command.image_count,
-                            on_progress=update_image_progress,
-                        )
+                    scheduled = _schedule_image_generation(
+                        config,
+                        repository,
+                        store,
+                        run.id,
+                        list(generated.package.get("visual_assets") or []),
+                        command.image_count,
+                    )
                 except Exception as exc:
-                    repository.update_pipeline_run(run.id, RunStatus.PARTIAL, current_stage="09")
                     _invalidate_view_cache(repository)
-                    progress_bar.empty()
                     st_module.warning(
-                        public_error_message("效果图生成未完成", exc, guidance="设计方案与 Prompt 已保存，可在 AI 效果图页面重试。")
+                        public_error_message("效果图后台任务未启动", exc, guidance="设计方案与 Prompt 已保存，可在 AI 效果图页面重试。")
                     )
-                    report = None
-                progress_bar.empty()
-                if report and report.failures:
-                    st_module.warning(
-                        f"已成功保存 {report.succeeded_count}/{report.requested_count} 张；失败项已保留诊断。"
-                    )
-                elif report:
-                    st_module.success(f"已生成并归档 {report.succeeded_count} 张效果图。")
+                else:
+                    if scheduled:
+                        st_module.success(
+                            f"设计方案已保存，{command.image_count} 张效果图已提交后台生成。"
+                            "现在可以切换到任意页面。"
+                        )
+                    else:
+                        st_module.info("该图像任务已在后台执行，可切换页面后再回来查看进度。")
             else:
                 repository.update_pipeline_run(run.id, RunStatus.SUCCEEDED, current_stage="08")
                 st_module.success("设计方案与工业设计 Prompt 已生成。")
@@ -1124,8 +1221,8 @@ def _render_demand(
             st_module.session_state.pop("v2_generation_command", None)
 
 
-def _render_artifact(st_module: object, artifact: object) -> None:
-    data = artifact.data or b""
+def _render_artifact(st_module: object, artifact: object, data: bytes | None = None) -> None:
+    data = data if data is not None else (artifact.data or b"")
     name = artifact.name
     mime_type = artifact.mime_type or mimetypes.guess_type(name)[0] or "application/octet-stream"
     if mime_type.startswith("image/"):
@@ -1161,31 +1258,106 @@ def _render_artifact(st_module: object, artifact: object) -> None:
     )
 
 
+def _load_artifact_data(history: HistoryService, artifact: object) -> bytes:
+    return _cached_view(
+        history.repository,
+        "artifact-data",
+        lambda: history.store.read(artifact.storage_path),
+        artifact.id,
+        artifact.sha256,
+    )
+
+
+def _graph_snapshot(detail: RunDetail) -> dict[str, list[dict[str, str]]]:
+    saved = detail.result.get("requirement_function_structure_graph")
+    if isinstance(saved, dict) and all(
+        isinstance(saved.get(key), list) for key in ("requirements", "functions", "structures", "links")
+    ):
+        return saved  # type: ignore[return-value]
+
+    requirements: list[dict[str, str]] = []
+    for item in list(detail.context.get("requirements") or []):
+        if isinstance(item, Mapping):
+            name = str(item.get("title") or item.get("name") or "").strip()
+            if name:
+                requirements.append({"name": name, "detail": str(item.get("description") or name)})
+    if not requirements:
+        requirements.append({"name": "本次设计需求", "detail": detail.run.demand_text})
+
+    constraints = detail.context.get("industrial_constraints")
+    constraints = constraints if isinstance(constraints, Mapping) else {}
+    functions = _graph_terms(constraints.get("core_functions")) or ["围绕需求的核心交互与服务功能"]
+    structures = _graph_terms(constraints.get("structure")) or [
+        str(constraints.get("product_type") or "模块化主体、交互区与功能组件")
+    ]
+    return {
+        "requirements": requirements,
+        "functions": [{"name": item, "source": "本次设计需求"} for item in functions],
+        "structures": [{"name": item, "source": "本次设计需求"} for item in structures],
+        "links": [
+            {
+                "requirement": item["name"],
+                "function": functions[index % len(functions)],
+                "structure": structures[index % len(structures)],
+            }
+            for index, item in enumerate(requirements)
+        ],
+    }
+
+
+def _graph_terms(value: object) -> list[str]:
+    raw = str(value or "").replace("\n", "、")
+    for delimiter in ("；", ";", "，", ",", "。", "、", "/"):
+        raw = raw.replace(delimiter, "|")
+    return list(dict.fromkeys(item.strip(" -：:") for item in raw.split("|") if item.strip(" -：:")))[:6]
+
+
 def _render_graph(st_module: object, history: HistoryService) -> None:
     st_module.markdown("### 需求—功能—结构图谱")
-    detail = _current_detail(st_module, history, include_data=True)
+    detail = _current_detail(st_module, history, include_data=False)
     if not detail:
-        st_module.info("暂无结果。请先运行完整流水线。")
+        st_module.info("暂无结果。请先在“需求生成”中创建任务。")
         return
+    graph = _graph_snapshot(detail)
+    st_module.markdown("#### 本次已生成图谱")
+    requirement_column, function_column, structure_column = st_module.columns(3)
+    with requirement_column:
+        st_module.markdown("**需求**")
+        for item in graph["requirements"]:
+            st_module.write(f"• {item.get('name', '')}")
+    with function_column:
+        st_module.markdown("**功能**")
+        for item in graph["functions"]:
+            st_module.write(f"• {item.get('name', '')}")
+    with structure_column:
+        st_module.markdown("**结构**")
+        for item in graph["structures"]:
+            st_module.write(f"• {item.get('name', '')}")
+    st_module.markdown("**需求 → 功能 → 结构映射**")
+    st_module.dataframe(graph["links"], hide_index=True, use_container_width=True)
     candidates = [
         item
         for item in detail.artifacts
         if item.name.lower().endswith((".csv", ".xlsx", ".xls", ".json", ".cypher"))
     ]
     if not candidates:
-        st_module.info("当前运行尚未生成可视化图谱或映射表。已完成的其他结果仍安全保留。")
         return
     selected = st_module.selectbox(
         "选择映射或图谱文件",
         candidates,
         format_func=lambda item: item.name,
     )
-    _render_artifact(st_module, selected)
+    loaded_key = f"v2_loaded_graph_artifact_{detail.run.id}"
+    if st_module.button("加载选中的归档图谱文件", key=f"v2_load_graph_{selected.id}"):
+        st_module.session_state[loaded_key] = selected.id
+        st_module.rerun()
+    if st_module.session_state.get(loaded_key) == selected.id:
+        _render_artifact(st_module, selected, _load_artifact_data(history, selected))
 
 
 def _render_design(st_module: object, history: HistoryService) -> None:
     st_module.markdown("### 设计方案")
-    detail = _current_detail(st_module, history, include_data=True)
+    detail = _current_detail(st_module, history, include_data=False)
     if not detail:
         st_module.info("暂无设计方案。请先在“需求生成”中创建任务。")
         return
@@ -1205,8 +1377,20 @@ def _render_design(st_module: object, history: HistoryService) -> None:
     else:
         st_module.info("该运行暂无结构化方案文本，可在下方下载原站归档文件。")
     documents = [item for item in detail.artifacts if item.kind == ArtifactKind.DOCUMENT.value]
-    for artifact in documents:
-        _render_artifact(st_module, artifact)
+    if documents:
+        st_module.markdown("#### 归档方案文件")
+        selected = st_module.selectbox(
+            "选择归档方案文件",
+            documents,
+            format_func=lambda item: item.name,
+            key=f"v2_design_artifact_{detail.run.id}",
+        )
+        loaded_key = f"v2_loaded_design_artifact_{detail.run.id}"
+        if st_module.button("加载选中的归档方案文件", key=f"v2_load_design_{selected.id}"):
+            st_module.session_state[loaded_key] = selected.id
+            st_module.rerun()
+        if st_module.session_state.get(loaded_key) == selected.id:
+            _render_artifact(st_module, selected, _load_artifact_data(history, selected))
 
 
 def _render_prompt(st_module: object, history: HistoryService) -> None:
@@ -1253,6 +1437,7 @@ def _render_images(
         f"当前产品：{run.target_product} · 最近运行：{run.status.value} · "
         f"计划图片 {run.image_count} 张。页面切换不自动读取大图。"
     )
+    _render_image_job_status(st_module, repository, run)
     loaded_run_id = str(st_module.session_state.get("v2_loaded_image_run_id") or "")
     detail: RunDetail | None = None
     images = []
@@ -1308,32 +1493,54 @@ def _render_images(
         icon=":material/refresh:",
         disabled=not confirmed,
     ):
-        if detail is None:
-            detail = _cached_run_detail(history, run.id, False)
-        command = GenerationCommand(
-            run.target_product,
-            run.demand_text,
-            config.image_provider,
-            config.image_model,
-            int(count),
-        )
-        service, text_provider = _generation_services(config, repository)
-        preview = service.preview(command, secrets.token_urlsafe(18))
-        run = service.confirm_and_start(command, preview, preview.confirmation_token)
-        _invalidate_view_cache(repository)
-        constraints = detail.context.get("industrial_constraints") or {}
-        generated = service.generate_design(run.id, command, constraints, text_provider)
-        report = ImageGenerationService(
-            repository, store, ExistingImageProvider(_image_provider_config(config))
-        ).generate(run.id, list(generated.package.get("visual_assets") or []), int(count))
+        previous_run = run
+        new_run = None
+        try:
+            if detail is None:
+                detail = _cached_run_detail(history, previous_run.id, False)
+            command = GenerationCommand(
+                previous_run.target_product,
+                previous_run.demand_text,
+                config.image_provider,
+                config.image_model,
+                int(count),
+            )
+            service, text_provider = _generation_services(config, repository)
+            preview = service.preview(command, secrets.token_urlsafe(18))
+            new_run = service.confirm_and_start(command, preview, preview.confirmation_token)
+            _invalidate_view_cache(repository)
+            generated = service.generate_design(
+                new_run.id,
+                command,
+                detail.context.get("industrial_constraints") or {},
+                text_provider,
+            )
+            _schedule_image_generation(
+                config,
+                repository,
+                store,
+                new_run.id,
+                list(generated.package.get("visual_assets") or []),
+                int(count),
+            )
+        except Exception as exc:
+            if new_run is not None:
+                repository.update_pipeline_run(new_run.id, RunStatus.FAILED, current_stage="09")
+            _invalidate_view_cache(repository)
+            st_module.error(
+                public_error_message(
+                    "重新生成任务未启动",
+                    exc,
+                    guidance="文字方案和历史记录不会丢失，请检查服务后重试。",
+                )
+            )
+            return
+        run = new_run
         st_module.session_state["v2_current_run_id"] = run.id
         _set_active_product(st_module, run.target_product)
         st_module.session_state["v2_current_run_id"] = run.id
         _invalidate_view_cache(repository)
-        if report.failures:
-            st_module.warning(f"重新生成完成：成功 {report.succeeded_count}/{report.requested_count} 张。")
-        else:
-            st_module.success("重新生成完成，已创建新的可追溯运行记录。")
+        st_module.success("已创建新的可追溯任务并提交后台生成，可立即切换页面。")
         st_module.rerun()
 
 
@@ -1729,9 +1936,13 @@ def main() -> None:
     history = HistoryService(repository, store)
     navigation = _render_sidebar(st, config)
     navigation = _render_mobile_navigation(st)
-    snapshot = _workspace_snapshot(repository)
     active = _active_product(st)
     navigation_snapshot = _workspace_snapshot(repository, active) if active else _WorkspaceView()
+    snapshot = (
+        _workspace_snapshot(repository)
+        if navigation == "知识库概览"
+        else navigation_snapshot
+    )
     _render_header(st, config, navigation_snapshot, navigation)
 
     if navigation == "导入评论资产":

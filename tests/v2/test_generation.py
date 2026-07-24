@@ -77,6 +77,11 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertEqual(generated.package["design_text"], "DeepSeek 增强后的完整设计方案")
         self.assertEqual(generated.package["text_generation_mode"], "live")
         self.assertGreater(generated.context["evidence_count"], 0)
+        graph = generated.package["requirement_function_structure_graph"]
+        self.assertTrue(graph["requirements"])
+        self.assertTrue(graph["functions"])
+        self.assertTrue(graph["structures"])
+        self.assertTrue(graph["links"])
         self.assertIsNotNone(self.repo.get_generation_run(run.id))
 
 
