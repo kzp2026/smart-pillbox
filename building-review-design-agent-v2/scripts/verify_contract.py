@@ -25,6 +25,7 @@ REQUIRED_PATHS = (
     "v2/config.py",
     "v2/application/view_cache.py",
     "v2/application/image_jobs.py",
+    "v2/application/generation_jobs.py",
     "v2/application/runtime_state.py",
     "v2/assets/studio-background.webp",
     "v2/assets/ai-brand-mark.webp",
@@ -38,6 +39,7 @@ REQUIRED_PATHS = (
     "tests/v2/test_error_messages.py",
     "tests/v2/test_view_cache.py",
     "tests/v2/test_image_jobs.py",
+    "tests/v2/test_generation_jobs.py",
     "tests/v2/test_schema_sql.py",
     "docs/V2_MIGRATION.md",
     "docs/V2_DEPLOY_STREAMLIT_CLOUD.md",
@@ -143,6 +145,8 @@ def verify_static(root: Path) -> list[str]:
         errors.append("V2 入口缺少旧模块热更新时使用的工作台零值回退。")
     if 'getattr(_runtime_state, "IMAGE_JOB_REGISTRY"' not in app_source:
         errors.append("V2 入口缺少旧运行时模块的图像作业注册表回退。")
+    if 'if navigation != "AI 效果图":' not in app_source or 'session_state.pop("v2_loaded_image_run_id", None)' not in app_source:
+        errors.append("AI 效果图预览离页清理契约缺失，会导致返回页面自动重读大图。")
     for marker in (
         "workspace_snapshot",
         "product_workspace_snapshot",
@@ -159,12 +163,21 @@ def verify_static(root: Path) -> list[str]:
         "重新连接私有服务",
         "本次已生成图谱",
         "_schedule_image_generation",
+        "_schedule_design_generation",
+        "build_graph_snapshot",
     ):
         if marker not in app_source:
             errors.append(f"V2 导航性能或百炼 Key 入口契约缺少：{marker}")
 
     runtime_source = (root / "v2/application/runtime_state.py").read_text(encoding="utf-8")
-    for marker in ("ExpiringViewCache(ttl_seconds=30)", "REPOSITORIES", "STORES", "VIEW_CACHE", "IMAGE_JOB_REGISTRY"):
+    for marker in (
+        "ExpiringViewCache(ttl_seconds=300)",
+        "REPOSITORIES",
+        "STORES",
+        "VIEW_CACHE",
+        "IMAGE_JOB_REGISTRY",
+        "GENERATION_JOB_REGISTRY",
+    ):
         if marker not in runtime_source:
             errors.append(f"V2 跨重跑运行时状态契约缺少：{marker}")
 
@@ -172,6 +185,11 @@ def verify_static(root: Path) -> list[str]:
     for marker in ("class ImageJobRegistry", "daemon=True", "def start("):
         if marker not in image_job_source:
             errors.append(f"V2 图像后台作业契约缺少：{marker}")
+
+    generation_job_source = (root / "v2/application/generation_jobs.py").read_text(encoding="utf-8")
+    for marker in ("class GenerationJobRegistry", "daemon=True", "def start("):
+        if marker not in generation_job_source:
+            errors.append(f"V2 文字后台作业契约缺少：{marker}")
 
     history_source = (root / "v2/application/history.py").read_text(encoding="utf-8")
     for marker in ("target_product", "data_mime_prefixes", "read_many"):

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import ast
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from streamlit.testing.v1 import AppTest
@@ -13,6 +15,7 @@ from v2.app import (
     STAGE_NAV_ITEMS,
     _cached_run_detail,
     _cached_runs,
+    _graph_snapshot,
     _invalidate_view_cache,
     _workspace_snapshot,
     masked_service_summary,
@@ -25,6 +28,64 @@ from v2.domain.models import WorkspaceSnapshot
 
 
 class AppStructureTests(unittest.TestCase):
+    def test_graph_rebuilds_stale_generic_snapshot(self) -> None:
+        detail = SimpleNamespace(
+            run=SimpleNamespace(demand_text="优化提醒、收纳与外观体验。"),
+            context={
+                "requirements": [
+                    {"title": "提醒反馈", "description": "老人需要听得见并能确认提醒。"},
+                    {"title": "容量收纳", "description": "希望有清晰的分格药仓。"},
+                ]
+            },
+            result={
+                "requirement_function_structure_graph": {
+                    "requirements": [{"name": "提醒反馈"}, {"name": "容量收纳"}],
+                    "functions": [{"name": "围绕需求的核心交互与服务功能"}],
+                    "structures": [{"name": "模块化主体、交互区与功能组件"}],
+                    "links": [
+                        {
+                            "requirement": "提醒反馈",
+                            "function": "围绕需求的核心交互与服务功能",
+                            "structure": "模块化主体、交互区与功能组件",
+                        },
+                        {
+                            "requirement": "容量收纳",
+                            "function": "围绕需求的核心交互与服务功能",
+                            "structure": "模块化主体、交互区与功能组件",
+                        },
+                    ],
+                }
+            },
+        )
+
+        graph = _graph_snapshot(detail)
+
+        self.assertIn("扬声器", graph["links"][0]["structure"])
+        self.assertIn("分格", graph["links"][1]["structure"])
+        self.assertNotEqual(graph["links"][0]["function"], graph["links"][1]["function"])
+
+    def test_product_run_cache_reuses_one_read_across_page_specific_limits(self) -> None:
+        class FakeRepository:
+            database_url = "sqlite:///cache-integration.sqlite3"
+            owner_id = "private-owner"
+            schema = "agent_v2"
+
+        class FakeHistory:
+            def __init__(self) -> None:
+                self.repository = FakeRepository()
+                self.calls: list[tuple[int, str | None]] = []
+
+            def list_runs(self, limit: int, target_product: str | None = None):
+                self.calls.append((limit, target_product))
+                return [f"{target_product}-{index}" for index in range(limit)]
+
+        history = FakeHistory()
+        _invalidate_view_cache(history.repository)  # type: ignore[arg-type]
+
+        self.assertEqual(len(_cached_runs(history, 20, "智能药盒")), 20)  # type: ignore[arg-type]
+        self.assertEqual(len(_cached_runs(history, 50, "智能药盒")), 50)  # type: ignore[arg-type]
+        self.assertEqual(history.calls, [(100, "智能药盒")])
+
     def test_navigation_rerun_reuses_repository_and_workspace_snapshot(self) -> None:
         initialize_calls: list[str] = []
         snapshot_calls: list[str] = []
@@ -59,6 +120,7 @@ class AppStructureTests(unittest.TestCase):
         self.assertIn("页面切换不自动读取大图", render_images_source)
         self.assertIn("加载效果图预览", render_images_source)
         self.assertIn('data_mime_prefixes=("image/",)', render_images_source)
+        self.assertIn('session_state.pop("v2_loaded_image_run_id", None)', source)
 
     def test_graph_and_design_pages_do_not_preload_archived_artifact_bytes(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
@@ -249,6 +311,13 @@ class AppStructureTests(unittest.TestCase):
             next(item for item in app.button if item.label == "确认并开始生成").click().run()
             self.assertEqual([], list(app.exception))
 
+            # Generation is intentionally asynchronous so navigation never waits for a model call.
+            for _ in range(20):
+                time.sleep(0.05)
+                app.run()
+                if any("统一产品设计锁定" in item.value for item in app.code):
+                    break
+
             navigation.set_value("设计方案").run()
             self.assertTrue(any("持久化验证产品" in item.value for item in app.markdown))
             navigation.set_value("工业设计 Prompt").run()
@@ -261,7 +330,9 @@ class AppStructureTests(unittest.TestCase):
             app = self._logged_in_app(Path(temp_dir) / "private.sqlite3")
             for page in NAV_ITEMS:
                 navigation = next(item for item in app.sidebar.radio if item.label == "工作台导航")
+                started_at = time.monotonic()
                 navigation.set_value(page).run()
+                self.assertLess(time.monotonic() - started_at, 2, page)
                 self.assertEqual([], list(app.exception), page)
 
     def test_import_page_exposes_full_and_single_stage_execution(self) -> None:

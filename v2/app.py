@@ -24,6 +24,7 @@ from v2.adapters.postgres import KnowledgeRepository
 from v2.adapters.storage import LocalArtifactStore, RepositoryArtifactStore, SupabaseArtifactStore
 from v2.application.artifacts import ArchiveLimits, UnsafeArchive, extract_archive, inspect_archive
 from v2.application.generation import GenerationCommand, GenerationService
+from v2.application.generation_jobs import GenerationJobRegistry
 from v2.application.history import HistoryService, RunDetail
 from v2.application.image_generation import ImageGenerationService
 from v2.application.image_jobs import ImageJobRegistry
@@ -61,6 +62,11 @@ _IMAGE_JOB_REGISTRY = getattr(_runtime_state, "IMAGE_JOB_REGISTRY", None)
 if _IMAGE_JOB_REGISTRY is None:
     _IMAGE_JOB_REGISTRY = ImageJobRegistry()
     setattr(_runtime_state, "IMAGE_JOB_REGISTRY", _IMAGE_JOB_REGISTRY)
+
+_GENERATION_JOB_REGISTRY = getattr(_runtime_state, "GENERATION_JOB_REGISTRY", None)
+if _GENERATION_JOB_REGISTRY is None:
+    _GENERATION_JOB_REGISTRY = GenerationJobRegistry()
+    setattr(_runtime_state, "GENERATION_JOB_REGISTRY", _GENERATION_JOB_REGISTRY)
 
 
 STAGE_NAV_ITEMS = (
@@ -166,21 +172,25 @@ def _cached_runs(
 ):
     product = str(target_product or "").strip()
 
+    requested_limit = max(1, int(limit))
+    cache_limit = 100 if product else requested_limit
+
     def load_runs():
         if not product:
-            return history.list_runs(limit)
+            return history.list_runs(cache_limit)
         try:
-            return history.list_runs(limit, target_product=product)
+            return history.list_runs(cache_limit, target_product=product)
         except TypeError:
-            return [run for run in history.list_runs(200) if run.target_product == product][:limit]
+            return [run for run in history.list_runs(200) if run.target_product == product][:cache_limit]
 
-    return _cached_view(
+    cached = _cached_view(
         history.repository,
         "pipeline-runs",
         load_runs,
-        int(limit),
         product,
+        cache_limit,
     )
+    return list(cached)[:requested_limit]
 
 
 def _cached_run_detail(
@@ -335,7 +345,13 @@ def _logout(st_module: object) -> None:
 
 
 def _sync_navigation(st_module: object, source_key: str, target_key: str) -> None:
-    st_module.session_state[target_key] = st_module.session_state[source_key]
+    navigation = st_module.session_state[source_key]
+    st_module.session_state[target_key] = navigation
+    # Large image bytes are deliberately opt-in.  Leaving the image page must
+    # clear the preview flag so returning through navigation never reloads all
+    # images and blocks the next page render.
+    if navigation != "AI 效果图":
+        st_module.session_state.pop("v2_loaded_image_run_id", None)
 
 
 def _open_key_settings(st_module: object) -> None:
@@ -972,6 +988,67 @@ def _image_job_key(repository: KnowledgeRepository, run_id: str) -> tuple[str, s
     return (_repository_scope(repository), str(run_id))
 
 
+def _generation_job_key(repository: KnowledgeRepository, run_id: str) -> tuple[str, str]:
+    return (_repository_scope(repository), str(run_id))
+
+
+def _schedule_design_generation(
+    config: AppConfig,
+    repository: KnowledgeRepository,
+    store: object,
+    run_id: str,
+    command: GenerationCommand,
+    industrial_constraints: Mapping[str, object],
+) -> bool:
+    """Start text generation first, then optional paid images, outside the UI request."""
+
+    repository.update_pipeline_run(run_id, RunStatus.RUNNING, current_stage="08")
+
+    def work() -> None:
+        try:
+            service, text_provider = _generation_services(config, repository)
+            generated = service.generate_design(run_id, command, industrial_constraints, text_provider)
+            if command.image_count:
+                _schedule_image_generation(
+                    config,
+                    repository,
+                    store,
+                    run_id,
+                    list(generated.package.get("visual_assets") or []),
+                    command.image_count,
+                )
+            else:
+                repository.update_pipeline_run(run_id, RunStatus.SUCCEEDED, current_stage="08")
+        except Exception:
+            repository.update_pipeline_run(run_id, RunStatus.FAILED, current_stage="08")
+            _invalidate_view_cache(repository)
+            raise
+        _invalidate_view_cache(repository)
+
+    try:
+        return _GENERATION_JOB_REGISTRY.start(
+            _generation_job_key(repository, run_id), work
+        )
+    except Exception:
+        repository.update_pipeline_run(run_id, RunStatus.FAILED, current_stage="08")
+        _invalidate_view_cache(repository)
+        raise
+
+
+def _render_generation_job_status(
+    st_module: object,
+    repository: KnowledgeRepository,
+    run: object,
+) -> None:
+    snapshot = _GENERATION_JOB_REGISTRY.snapshot(_generation_job_key(repository, run.id))
+    if snapshot is not None and snapshot.status == "running":
+        st_module.info("设计方案正在后台生成，可立即切换页面；完成后将自动写入当前任务。")
+    elif snapshot is not None and snapshot.status == "failed":
+        st_module.warning(snapshot.error)
+    elif snapshot is None and run.status == RunStatus.RUNNING and not run.current_stage == "09":
+        st_module.info("设计方案正在生成。请稍后刷新本页查看结果。")
+
+
 def _schedule_image_generation(
     config: AppConfig,
     repository: KnowledgeRepository,
@@ -1166,21 +1243,21 @@ def _render_demand(
             icon=":material/auto_awesome:",
             disabled=not confirmed,
         ):
-            service, text_provider = _generation_services(config, repository)
+            service, _ = _generation_services(config, repository)
             provided_token = preview.confirmation_token if confirmed else None
             run = service.confirm_and_start(command, preview, provided_token)
             _set_active_product(st_module, command.target_product)
             st_module.session_state["v2_current_run_id"] = run.id
             _invalidate_view_cache(repository)
             try:
-                repository.update_pipeline_run(run.id, RunStatus.RUNNING, current_stage="08")
-                with st_module.spinner("正在检索私有证据并生成设计方案……"):
-                    generated = service.generate_design(
-                        run.id,
-                        command,
-                        st_module.session_state.get("v2_generation_constraints", {}),
-                        text_provider,
-                    )
+                scheduled = _schedule_design_generation(
+                    config,
+                    repository,
+                    store,
+                    run.id,
+                    command,
+                    st_module.session_state.get("v2_generation_constraints", {}),
+                )
             except Exception as exc:
                 repository.update_pipeline_run(run.id, RunStatus.FAILED, current_stage="08")
                 _invalidate_view_cache(repository)
@@ -1188,32 +1265,13 @@ def _render_demand(
                     public_error_message("设计方案生成失败", exc, guidance="已保留本次任务，可在确认服务配置后重试。")
                 )
                 return
-            if command.image_count:
-                try:
-                    scheduled = _schedule_image_generation(
-                        config,
-                        repository,
-                        store,
-                        run.id,
-                        list(generated.package.get("visual_assets") or []),
-                        command.image_count,
-                    )
-                except Exception as exc:
-                    _invalidate_view_cache(repository)
-                    st_module.warning(
-                        public_error_message("效果图后台任务未启动", exc, guidance="设计方案与 Prompt 已保存，可在 AI 效果图页面重试。")
-                    )
-                else:
-                    if scheduled:
-                        st_module.success(
-                            f"设计方案已保存，{command.image_count} 张效果图已提交后台生成。"
-                            "现在可以切换到任意页面。"
-                        )
-                    else:
-                        st_module.info("该图像任务已在后台执行，可切换页面后再回来查看进度。")
+            if scheduled:
+                st_module.success(
+                    "任务已提交后台处理，可立即切换页面。设计方案、图谱和 Prompt 会先写入；"
+                    f"随后生成 {command.image_count} 张效果图。"
+                )
             else:
-                repository.update_pipeline_run(run.id, RunStatus.SUCCEEDED, current_stage="08")
-                st_module.success("设计方案与工业设计 Prompt 已生成。")
+                st_module.info("该设计任务已在后台执行，可切换页面后再回来查看进度。")
             st_module.session_state["v2_generation_last_run"] = run.id
             st_module.session_state["v2_current_run_id"] = run.id
             _invalidate_view_cache(repository)
@@ -1268,48 +1326,13 @@ def _load_artifact_data(history: HistoryService, artifact: object) -> bytes:
     )
 
 
-def _graph_snapshot(detail: RunDetail) -> dict[str, list[dict[str, str]]]:
+def _graph_snapshot(detail: RunDetail) -> dict[str, object]:
     saved = detail.result.get("requirement_function_structure_graph")
-    if isinstance(saved, dict) and all(
-        isinstance(saved.get(key), list) for key in ("requirements", "functions", "structures", "links")
-    ):
-        return saved  # type: ignore[return-value]
-
-    requirements: list[dict[str, str]] = []
-    for item in list(detail.context.get("requirements") or []):
-        if isinstance(item, Mapping):
-            name = str(item.get("title") or item.get("name") or "").strip()
-            if name:
-                requirements.append({"name": name, "detail": str(item.get("description") or name)})
-    if not requirements:
-        requirements.append({"name": "本次设计需求", "detail": detail.run.demand_text})
-
     constraints = detail.context.get("industrial_constraints")
     constraints = constraints if isinstance(constraints, Mapping) else {}
-    functions = _graph_terms(constraints.get("core_functions")) or ["围绕需求的核心交互与服务功能"]
-    structures = _graph_terms(constraints.get("structure")) or [
-        str(constraints.get("product_type") or "模块化主体、交互区与功能组件")
-    ]
-    return {
-        "requirements": requirements,
-        "functions": [{"name": item, "source": "本次设计需求"} for item in functions],
-        "structures": [{"name": item, "source": "本次设计需求"} for item in structures],
-        "links": [
-            {
-                "requirement": item["name"],
-                "function": functions[index % len(functions)],
-                "structure": structures[index % len(structures)],
-            }
-            for index, item in enumerate(requirements)
-        ],
-    }
-
-
-def _graph_terms(value: object) -> list[str]:
-    raw = str(value or "").replace("\n", "、")
-    for delimiter in ("；", ";", "，", ",", "。", "、", "/"):
-        raw = raw.replace(delimiter, "|")
-    return list(dict.fromkeys(item.strip(" -：:") for item in raw.split("|") if item.strip(" -：:")))[:6]
+    if GenerationService.is_semantic_graph_snapshot(saved):
+        return dict(saved)
+    return GenerationService.build_graph_snapshot(detail.run.demand_text, detail.context, constraints)
 
 
 def _render_graph(st_module: object, history: HistoryService) -> None:
@@ -1318,23 +1341,36 @@ def _render_graph(st_module: object, history: HistoryService) -> None:
     if not detail:
         st_module.info("暂无结果。请先在“需求生成”中创建任务。")
         return
+    _render_generation_job_status(st_module, history.repository, detail.run)
     graph = _graph_snapshot(detail)
     st_module.markdown("#### 本次已生成图谱")
     requirement_column, function_column, structure_column = st_module.columns(3)
     with requirement_column:
         st_module.markdown("**需求**")
-        for item in graph["requirements"]:
+        for item in list(graph["requirements"]):
             st_module.write(f"• {item.get('name', '')}")
     with function_column:
         st_module.markdown("**功能**")
-        for item in graph["functions"]:
+        for item in list(graph["functions"]):
             st_module.write(f"• {item.get('name', '')}")
     with structure_column:
         st_module.markdown("**结构**")
-        for item in graph["structures"]:
+        for item in list(graph["structures"]):
             st_module.write(f"• {item.get('name', '')}")
     st_module.markdown("**需求 → 功能 → 结构映射**")
-    st_module.dataframe(graph["links"], hide_index=True, use_container_width=True)
+    st_module.dataframe(
+        [
+            {
+                "需求": item.get("requirement", ""),
+                "对应功能": item.get("function", ""),
+                "承载结构": item.get("structure", ""),
+                "用户证据": item.get("evidence", ""),
+            }
+            for item in list(graph["links"])
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
     candidates = [
         item
         for item in detail.artifacts
@@ -1361,6 +1397,7 @@ def _render_design(st_module: object, history: HistoryService) -> None:
     if not detail:
         st_module.info("暂无设计方案。请先在“需求生成”中创建任务。")
         return
+    _render_generation_job_status(st_module, history.repository, detail.run)
     if detail.quality_status:
         score = f"{detail.quality_score:.1f}" if detail.quality_score else "—"
         st_module.caption(f"质量状态：{detail.quality_status} · 评分：{score}")
@@ -1399,6 +1436,7 @@ def _render_prompt(st_module: object, history: HistoryService) -> None:
     if not detail:
         st_module.info("暂无 Prompt。请先生成设计方案。")
         return
+    _render_generation_job_status(st_module, history.repository, detail.run)
     prompt = str(detail.result.get("industrial_design_prompt") or "")
     if prompt:
         st_module.code(prompt, language=None, wrap_lines=True)
@@ -1505,23 +1543,17 @@ def _render_images(
                 config.image_model,
                 int(count),
             )
-            service, text_provider = _generation_services(config, repository)
+            service, _ = _generation_services(config, repository)
             preview = service.preview(command, secrets.token_urlsafe(18))
             new_run = service.confirm_and_start(command, preview, preview.confirmation_token)
             _invalidate_view_cache(repository)
-            generated = service.generate_design(
-                new_run.id,
-                command,
-                detail.context.get("industrial_constraints") or {},
-                text_provider,
-            )
-            _schedule_image_generation(
+            _schedule_design_generation(
                 config,
                 repository,
                 store,
                 new_run.id,
-                list(generated.package.get("visual_assets") or []),
-                int(count),
+                command,
+                detail.context.get("industrial_constraints") or {},
             )
         except Exception as exc:
             if new_run is not None:
