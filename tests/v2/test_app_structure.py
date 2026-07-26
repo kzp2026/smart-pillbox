@@ -13,8 +13,10 @@ from streamlit.testing.v1 import AppTest
 from v2.app import (
     NAV_ITEMS,
     STAGE_NAV_ITEMS,
+    _GENERATION_JOB_REGISTRY,
     _cached_run_detail,
     _cached_runs,
+    _generation_job_key,
     _graph_snapshot,
     _invalidate_view_cache,
     _workspace_snapshot,
@@ -231,6 +233,11 @@ class AppStructureTests(unittest.TestCase):
                 "V2_USERNAME": "owner",
                 "V2_PASSWORD_HASH": hash_password("correct-password", salt=b"0" * 16),
                 "V2_DATABASE_URL": f"sqlite:///{database}",
+                # AppTest can inherit local Streamlit secrets.  Keep UI tests
+                # deterministic: neither text nor image providers may call a
+                # live, billable network service from this helper.
+                "V2_DEEPSEEK_API_KEY": "",
+                "V2_IMAGE_API_KEY": "",
             }
         )
         app.run()
@@ -311,17 +318,32 @@ class AppStructureTests(unittest.TestCase):
             next(item for item in app.button if item.label == "确认并开始生成").click().run()
             self.assertEqual([], list(app.exception))
 
-            # Generation is intentionally asynchronous so navigation never waits for a model call.
-            for _ in range(20):
-                time.sleep(0.05)
-                app.run()
-                if any("统一产品设计锁定" in item.value for item in app.code):
-                    break
+            # Generation is intentionally asynchronous so navigation never waits for
+            # it.  Wait for this run's deterministic offline worker rather than
+            # polling a UI tree that could be refreshed while the worker is pending.
+            run_id = str(app.session_state["v2_current_run_id"])
+            repository = KnowledgeRepository(
+                f"sqlite:///{Path(temp_dir) / 'private.sqlite3'}",
+                "private-owner",
+                "agent_v2",
+            )
+            self.assertTrue(
+                _GENERATION_JOB_REGISTRY.wait(
+                    _generation_job_key(repository, run_id), timeout=5
+                )
+            )
+            job = _GENERATION_JOB_REGISTRY.snapshot(_generation_job_key(repository, run_id))
+            self.assertIsNotNone(job)
+            self.assertEqual(job.status, "completed", job)
+            app.run()
 
             navigation.set_value("设计方案").run()
             self.assertTrue(any("持久化验证产品" in item.value for item in app.markdown))
             navigation.set_value("工业设计 Prompt").run()
-            self.assertTrue(any("统一产品设计锁定" in item.value for item in app.code))
+            self.assertTrue(
+                any("统一产品设计锁定" in item.value for item in app.code),
+                f"job={job}; result={repository.get_generation_run(run_id)}; code={[item.value for item in app.code]}",
+            )
             navigation.set_value("需求-功能-结构图谱").run()
             self.assertTrue(any("本次已生成图谱" in item.value for item in app.markdown))
 

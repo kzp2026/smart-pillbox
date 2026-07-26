@@ -1,5 +1,13 @@
 # V2 验证与交付门
 
+## Visual delivery quality gate
+V2 generation tests must run through the `v2/app.py` entry path and verify that the shared design-package generator can be imported when the Python working path initially contains only the V2 entry directory.
+- Unit tests must prove that a complete eight-asset plan receives `visual-delivery-v1` status `pass`, carries one canonical product identity, and contains per-asset acceptance criteria.
+- Unit tests must prove that an incomplete plan receives `needs_revision` and lists its missing asset keys.
+- The exploded prompt must contain a single assembly sequence and forbid duplicate shells/trays; the three-view must require orthographic same-scale views; the board must require CMF communication and prohibit illegible paragraphs; both usage prompts must require complete fingers.
+- Run the no-cost plan gate before provider invocation. Do not substitute a provider call or a historical screenshot for this deterministic check.
+- For a real provider acceptance, request an explicit paid-generation confirmation, then inspect the resulting pixels against the persisted criteria before describing them as final quality.
+
 ## 最小验证顺序
 
 1. 运行新测试，确认 RED 失败原因是目标行为缺失。

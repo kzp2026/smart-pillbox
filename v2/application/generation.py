@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping, Protocol
 
 from v2.adapters.postgres import KnowledgeRepository
 from v2.domain.models import CreateRunCommand, PipelineRun
 from v2.providers.text import TextGenerationRequest, TextResult
+from v2.application.visual_quality import qualify_visual_delivery
 
 
 class ConfirmationRequired(ValueError):
@@ -148,6 +151,12 @@ class GenerationService:
         industrial_constraints: Mapping[str, object],
         text_provider: TextProvider,
     ) -> GeneratedDesign:
+        # Streamlit launches `v2/app.py` with `v2/` as the script directory.
+        # Resolve the repository root explicitly so the shared generator remains
+        # available both from the V2 entry point and from package-based tests.
+        project_root = str(Path(__file__).resolve().parents[2])
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
         from scripts.product_knowledge_base import generate_design_package, to_json_safe
 
         context = self.repository.search_context(
@@ -160,6 +169,15 @@ class GenerationService:
             context,
             industrial_constraints=dict(industrial_constraints),
         )
+        visual_assets, visual_quality_gate = qualify_visual_delivery(
+            command.target_product,
+            list(package.get("visual_assets") or []),
+            industrial_constraints,
+        )
+        package["visual_assets"] = visual_assets
+        package["image_prompts"] = [str(asset.get("prompt") or "") for asset in visual_assets]
+        package["image_prompt_text"] = package["image_prompts"][0] if visual_assets else ""
+        package["visual_quality_gate"] = visual_quality_gate
         package["requirement_function_structure_graph"] = self.build_graph_snapshot(
             command.demand_text,
             context,

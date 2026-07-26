@@ -82,6 +82,14 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertTrue(graph["functions"])
         self.assertTrue(graph["structures"])
         self.assertTrue(graph["links"])
+        visual_gate = generated.package["visual_quality_gate"]
+        self.assertEqual(visual_gate["status"], "pass")
+        self.assertEqual(visual_gate["planned_asset_count"], 8)
+        visual_assets = generated.package["visual_assets"]
+        self.assertEqual(len({item["canonical_product_id"] for item in visual_assets}), 1)
+        self.assertIn("assembly sequence", next(
+            item["prompt"] for item in visual_assets if item["key"] == "exploded"
+        ).lower())
         self.assertIsNotNone(self.repo.get_generation_run(run.id))
 
     def test_graph_snapshot_deduplicates_requirements_and_maps_specific_functions(self) -> None:

@@ -28,6 +28,8 @@ class ContractVerifierTests(unittest.TestCase):
         self.assertIn("tests/v2/test_view_cache.py", REQUIRED_PATHS)
         self.assertIn("tests/v2/test_image_jobs.py", REQUIRED_PATHS)
         self.assertIn("tests/v2/test_generation_jobs.py", REQUIRED_PATHS)
+        self.assertIn("v2/application/visual_quality.py", REQUIRED_PATHS)
+        self.assertIn("tests/v2/test_visual_quality.py", REQUIRED_PATHS)
         self.assertIn("v2/assets/studio-background.webp", REQUIRED_PATHS)
         self.assertIn("v2/migrations/002_product_workflow_hardening.sql", REQUIRED_PATHS)
         self.assertNotIn("v2/assets/assistant-mascot.webp", REQUIRED_PATHS)

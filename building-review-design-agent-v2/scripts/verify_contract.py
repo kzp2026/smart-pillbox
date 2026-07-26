@@ -27,6 +27,7 @@ REQUIRED_PATHS = (
     "v2/application/image_jobs.py",
     "v2/application/generation_jobs.py",
     "v2/application/runtime_state.py",
+    "v2/application/visual_quality.py",
     "v2/assets/studio-background.webp",
     "v2/assets/ai-brand-mark.webp",
     "v2/ui/errors.py",
@@ -40,6 +41,7 @@ REQUIRED_PATHS = (
     "tests/v2/test_view_cache.py",
     "tests/v2/test_image_jobs.py",
     "tests/v2/test_generation_jobs.py",
+    "tests/v2/test_visual_quality.py",
     "tests/v2/test_schema_sql.py",
     "docs/V2_MIGRATION.md",
     "docs/V2_DEPLOY_STREAMLIT_CLOUD.md",
@@ -190,6 +192,27 @@ def verify_static(root: Path) -> list[str]:
     for marker in ("class GenerationJobRegistry", "daemon=True", "def start("):
         if marker not in generation_job_source:
             errors.append(f"V2 文字后台作业契约缺少：{marker}")
+
+    visual_quality_source = (root / "v2/application/visual_quality.py").read_text(encoding="utf-8")
+    for marker in (
+        "def qualify_visual_delivery(",
+        '"visual-delivery-v1"',
+        "vertical assembly sequence",
+        "Orthographic three-view",
+        "no illegible paragraphs",
+        "complete fingers",
+    ):
+        if marker not in visual_quality_source:
+            errors.append(f"V2 效果图交付质量门契约缺少：{marker}")
+
+    generation_source = (root / "v2/application/generation.py").read_text(encoding="utf-8")
+    for marker in (
+        "project_root = str(Path(__file__).resolve().parents[2])",
+        "if project_root not in sys.path:",
+        "from scripts.product_knowledge_base import generate_design_package, to_json_safe",
+    ):
+        if marker not in generation_source:
+            errors.append(f"V2 入口生成模块解析契约缺少：{marker}")
 
     history_source = (root / "v2/application/history.py").read_text(encoding="utf-8")
     for marker in ("target_product", "data_mime_prefixes", "read_many"):

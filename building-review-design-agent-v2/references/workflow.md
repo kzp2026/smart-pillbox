@@ -1,5 +1,11 @@
 # V2 网页创建与持续扩展流程
 
+## Visual delivery plan quality gate
+
+Before scheduling a paid image job, pass the complete visual asset plan through `v2/application/visual_quality.py`. Preserve one canonical product identity across all eight assets and append the asset-specific contract before handing prompts to the provider. The exploded view must describe an assembly sequence rather than generic floating electronics; the three-view must use aligned orthographic geometry; the board must communicate CMF and the visual story without relying on illegible generated paragraphs; usage scenes must require complete, physically plausible hands. Persist `visual_quality_gate` and per-asset `acceptance_criteria` with the run. The Design and Prompt pages can expose this plan-level gate without loading image data.
+
+Do not claim that the gate has visually accepted provider pixels. A paid real-image review remains a separate owner-confirmed acceptance action.
+
 ## 1. 业务规格固定
 
 先把用户语言转成可验收结果：保留原网页；同仓库新增 V2；使用独立入口和网址；独立私有 schema 与资产空间；复制而非搬迁现有数据；单用户私有登录；完整保留结果、效果图、下载和旧十阶段能力；视觉对齐用户截图。

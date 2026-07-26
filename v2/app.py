@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import json
 import mimetypes
 import os
@@ -56,6 +57,9 @@ from v2.ui.components import (
 )
 from v2.ui.errors import public_error_message
 from v2.ui.theme import inject_theme
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 _IMAGE_JOB_REGISTRY = getattr(_runtime_state, "IMAGE_JOB_REGISTRY", None)
@@ -1020,6 +1024,7 @@ def _schedule_design_generation(
             else:
                 repository.update_pipeline_run(run_id, RunStatus.SUCCEEDED, current_stage="08")
         except Exception:
+            _LOGGER.exception("V2 background design generation failed for run %s", run_id)
             repository.update_pipeline_run(run_id, RunStatus.FAILED, current_stage="08")
             _invalidate_view_cache(repository)
             raise
@@ -1401,6 +1406,7 @@ def _render_design(st_module: object, history: HistoryService) -> None:
     if detail.quality_status:
         score = f"{detail.quality_score:.1f}" if detail.quality_score else "—"
         st_module.caption(f"质量状态：{detail.quality_status} · 评分：{score}")
+    _render_visual_delivery_gate(st_module, detail.result)
     design_text = str(detail.result.get("design_text") or "")
     if design_text:
         st_module.markdown(design_text)
@@ -1437,6 +1443,7 @@ def _render_prompt(st_module: object, history: HistoryService) -> None:
         st_module.info("暂无 Prompt。请先生成设计方案。")
         return
     _render_generation_job_status(st_module, history.repository, detail.run)
+    _render_visual_delivery_gate(st_module, detail.result)
     prompt = str(detail.result.get("industrial_design_prompt") or "")
     if prompt:
         st_module.code(prompt, language=None, wrap_lines=True)
@@ -1447,6 +1454,32 @@ def _render_prompt(st_module: object, history: HistoryService) -> None:
     for index, item in enumerate(prompts, start=1):
         with st_module.expander(f"图像任务 {index}", expanded=index == 1):
             st_module.code(str(item), language=None, wrap_lines=True)
+
+
+def _render_visual_delivery_gate(st_module: object, result: Mapping[str, object]) -> None:
+    """Expose the deterministic pre-generation quality contract without loading image bytes."""
+
+    gate = result.get("visual_quality_gate")
+    if not isinstance(gate, Mapping):
+        return
+    status = str(gate.get("status") or "")
+    planned = int(gate.get("planned_asset_count") or 0)
+    missing = list(gate.get("missing_requirements") or [])
+    if status == "pass":
+        st_module.success(f"效果图交付计划已通过质量门：{planned} 张任务均已锁定统一产品、工程表达与评审要求。")
+    else:
+        st_module.warning(
+            "效果图交付计划尚未达标：缺少 " + ", ".join(str(item) for item in missing)
+        )
+    with st_module.expander("查看效果图验收标准", expanded=False):
+        st_module.caption(str(gate.get("review_note") or ""))
+        for asset in list(result.get("visual_assets") or []):
+            if not isinstance(asset, Mapping):
+                continue
+            label = str(asset.get("label") or asset.get("key") or "图像任务")
+            criteria = [str(item) for item in list(asset.get("acceptance_criteria") or []) if str(item)]
+            if criteria:
+                st_module.markdown(f"**{label}**：" + "；".join(criteria))
 
 
 def _render_images(

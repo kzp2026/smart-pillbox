@@ -1,5 +1,14 @@
 # Review Design Agent V2 项目契约
 
+## Visual delivery quality gate
+The V2 entry point must resolve the repository root before importing the shared design-package generator, so text/graph generation works when Streamlit starts from `v2/app.py` rather than the repository root.
+- `v2/application/visual_quality.py` converts every new eight-image delivery plan into one canonical-product contract before any paid provider call.
+- The contract adds asset-specific acceptance criteria to the two renders, engineering exploded view, detail, orthographic three-view, presentation board and two usage scenes.
+- The gate must fail the plan when any required asset key is missing; it must not describe an incomplete or generic plan as passed.
+- The prompt contract prohibits duplicate shells/trays, unexplained floating electronics, invented dimensions, unreadable pseudo-text and impossible hand-product intersections.
+- The Design and Industrial Design Prompt pages expose the deterministic plan gate and acceptance criteria without reading image bytes.
+- The gate validates the generation plan only. Provider pixels still require an owner review before they are accepted as final industrial-design artwork.
+
 ## 产品目标
 
 在同一 Git 仓库保留原网页，同时维护一个独立的新入口、新网址、私有数据空间和单用户登录的 V2。V2 不是精简版；原站可运行、展示、恢复或下载的结果、效果图和功能都必须有对应入口。

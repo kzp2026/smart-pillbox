@@ -1,5 +1,13 @@
 # Original interface QA record
 
+## 2026-07-27 — Visual-delivery plan QA
+
+- Added a no-cost, deterministic pre-generation gate for all eight required V2 visual assets.
+- The gate locks one canonical product identity and adds acceptance criteria for render variation, assembly plausibility, three-view geometry, CMF/presentation-board readability and usage-scene hand geometry.
+- The Design and Prompt pages render the saved plan gate and its criteria without loading image bytes, so this addition does not weaken the two-second navigation rule.
+- Automated evidence: `tests/v2/test_visual_quality.py` checks both a complete pass plan and an incomplete rejection plan; `tests/v2/test_generation.py` verifies the gate persists with a generated package.
+- No paid provider request was made in this QA pass. Generated pixels remain pending an owner-confirmed paid final review and cannot be represented here as visually accepted.
+
 ## 2026-07-22 · V2 workflow hardening
 
 - Desktop evidence: `docs/qa/v2-workflow-hardening-1440x1000.png`.
