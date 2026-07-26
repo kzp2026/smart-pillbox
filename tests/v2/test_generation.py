@@ -84,6 +84,32 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertTrue(graph["links"])
         self.assertIsNotNone(self.repo.get_generation_run(run.id))
 
+    def test_graph_snapshot_deduplicates_requirements_and_maps_specific_functions(self) -> None:
+        graph = GenerationService._build_graph_snapshot(
+            "为适老智能药盒优化提醒、收纳与外观体验。",
+            {
+                "requirements": [
+                    {"title": "提醒反馈", "description": "提醒声音太小，老人听不清。"},
+                    {"title": "提醒反馈", "description": "希望能看到服药确认状态。"},
+                    {"title": "容量收纳", "description": "药仓需要按时段清晰分格。"},
+                    {"title": "外观质感", "description": "希望产品更简洁、有品质感。"},
+                ]
+            },
+            {},
+        )
+
+        self.assertEqual(
+            [item["name"] for item in graph["requirements"]],
+            ["提醒反馈", "容量收纳", "外观质感"],
+        )
+        mapped = {item["requirement"]: item for item in graph["links"]}
+        self.assertIn("提醒", mapped["提醒反馈"]["function"])
+        self.assertIn("扬声器", mapped["提醒反馈"]["structure"])
+        self.assertIn("收纳", mapped["容量收纳"]["function"])
+        self.assertIn("分格", mapped["容量收纳"]["structure"])
+        self.assertIn("外观", mapped["外观质感"]["function"])
+        self.assertIn("外壳", mapped["外观质感"]["structure"])
+
 
 if __name__ == "__main__":
     unittest.main()

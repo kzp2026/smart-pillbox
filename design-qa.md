@@ -64,6 +64,15 @@ final result: passed
 - Every newly generated text package persists a requirement → function → structure snapshot. Historical runs without the snapshot receive a compatible read-only view from their saved demand and constraints.
 - Navigation avoids the unneeded global workspace query outside the overview page. Local V2 regression suite: 107 passed.
 
+## 2026-07-25 路 Semantic graph and responsive generation QA
+
+- The requirement-function-structure graph removes duplicate requirement titles, preserves merged user evidence, and maps every requirement to a specific function and physical structure. Existing generic snapshots are rebuilt read-only when opened.
+- Product-scoped run lists are shared across graph, design, prompt and image pages for 300 seconds and invalidated immediately after writes. This removes repeated list reads caused only by page-specific display limits.
+- Confirming a design task now returns after creation and starts text generation in a background registry; image work begins only after the persisted text package is ready. Page navigation no longer waits for DeepSeek or DashScope network calls.
+- Leaving the image page clears its explicit preview flag. Returning through normal navigation therefore never reloads large image bytes; the user explicitly chooses to load a preview again.
+- The no-cost end-to-end acceptance run seeds four evidence-backed needs, persists a 达标 design package, verifies four distinct requirement/function/structure mappings, and verifies the complete eight-image delivery plan without calling the paid provider.
+- Streamlit AppTest measures every navigation switch under two seconds in the local private-database journey; the background-job submission regression test enforces a sub-0.2-second return.
+
 **Final result: PASSED**
 
 ## Visual source

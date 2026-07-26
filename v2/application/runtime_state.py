@@ -4,6 +4,7 @@ from typing import Any
 
 from v2.application.view_cache import ExpiringViewCache
 from v2.application.image_jobs import ImageJobRegistry
+from v2.application.generation_jobs import GenerationJobRegistry
 
 
 # Streamlit executes the entry script in a fresh module on every widget change.
@@ -11,5 +12,6 @@ from v2.application.image_jobs import ImageJobRegistry
 LOGIN_GUARDS: dict[str, Any] = {}
 REPOSITORIES: dict[tuple[str, str, str], Any] = {}
 STORES: dict[tuple[str, ...], object] = {}
-VIEW_CACHE: ExpiringViewCache[Any] = ExpiringViewCache(ttl_seconds=30)
+VIEW_CACHE: ExpiringViewCache[Any] = ExpiringViewCache(ttl_seconds=300)
 IMAGE_JOB_REGISTRY = ImageJobRegistry()
+GENERATION_JOB_REGISTRY = GenerationJobRegistry()
