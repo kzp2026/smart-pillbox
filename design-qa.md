@@ -1,5 +1,14 @@
 # Original interface QA record
 
+## 2026-09-05 — Paper evidence center
+
+- New page preserves the existing dark console and 7-stage navigation; now 10 total navigation entries. No original-site theme/config change.
+- Desktop: `docs/qa/v2-paper-1440x1000.png`; mobile: `docs/qa/v2-paper-390x844.png`. Measured document widths equal 1440 and 390 respectively. Native data grids retain the existing light-grid rendering; outer forms/download controls remain dark.
+- Browser exercised local-only login, synthetic CSV upload, source form, deduplication (7→6), saved run, missing-human-evidence state, result switching and actual ZIP download; browser errors: 0.
+- The downloaded ZIP passed all 33 contained-file SHA-256 checks. No real human scores or model accuracy were fabricated for UI acceptance.
+- DOCX rendered to 4 A4 pages and checked page by page. Actual existing-input results and limitations are recorded in `docs/V2_PAPER_VALIDATION.md`.
+- Verdict: local functional/responsive acceptance passed. Not deployed; real research claims remain subject to the evidence requirements in the validation report.
+
 ## 2026-07-27 — Visual-delivery plan QA
 
 - Added a no-cost, deterministic pre-generation gate for all eight required V2 visual assets.
@@ -189,3 +198,35 @@ The reference and final desktop capture were reviewed together in one comparison
 - A confirmed run is selected before the text or image call starts. If image generation fails, the saved design text and Prompt remain available as a partial run.
 - The default paid delivery is eight distinct tasks: product render ×2, exploded view, detail view, orthographic three-view, design board and usage scene ×2. Every paid run still requires the existing explicit confirmation.
 - Text inputs and textareas now use a high-contrast white caret on the dark canvas.
+
+
+## 2026-09-06 · paper-repro-v2.0 本地验收
+
+- 参考：已有深海军蓝V2控制台，保留布局、导航与私有服务边界。测试账号为本地SIM fixture，数据库与归档独立于用户数据。
+- 桌面1440×1000：docs/qa/v2-repro-desktop-1440x1000.png；手机390×844：docs/qa/v2-repro-mobile-390x844.png；原站：docs/qa/original-repro-smoke-1440x1000.png。新截图单独命名，没有覆盖既有截图。
+- 实际流程：登录 → 论文实验中心 → 上传510条评论（默认列为评论） → fake正式运行 → 重开既存运行 → 下载ZIP。91个归档文件逐一哈希校验通过。
+- 状态显示：paper-repro-v2.0、KMeans+TF-IDF、500证据、0审核、fake、独立评价False、闭环False；legacy辅助工具单独标识。
+- 浏览器复现历史重开后状态延迟；新增AppTest RED后补充立即rerun，浏览器和AppTest均验证通过。
+- 手机先收起侧栏再查看结果，文档宽度390/视口390；桌面宽1440，无横向溢出。初次直接缩窄的侧栏展开截图保留为过程记录，不作为无遮挡验收图。
+- 全屏及重点区域检查：输入、真实算法、警示、七项状态、下载/历史/回评入口可读；桌面与手机均保留现有风格。浏览器控制台错误0、警告0。
+- 验证范围为本地隔离环境；生产登录、云数据库/Storage与付费图片服务没有调用或部署。完整测试和运行路径见 experiment/verification/DELIVERY.md。
+
+## 2026-09-07 · paper-repro-v2.1 正式研究准备态
+
+- V2 论文实验区新增 test 与 research 两种明确模式；research 显示 DeepSeek 真实 provider 选择，但网页唯一主操作为“准备研究材料（停在图谱）”。
+- graph 准备完成后状态明确显示 paused，未调用文字模型；归档可下载供人工映射审核。页面没有真实生成按钮，因此本轮未产生收费调用。
+- 同一页面请求编号重复提交复用原运行；“新建实验请求”生成新编号，避免同配置的新实验误开旧方案。
+- paper-repro-v2.0 历史继续出现在正式实验历史中并可只读打开；v2.1 的 paused、failed 和 completed 记录均可重开或下载已有归档。
+- 本次为逻辑与 AppTest 验收，未更新既有桌面/移动正式截图；生产服务、数据库、Storage、真实 DeepSeek 与部署均未调用。
+
+### 本轮补充的实际浏览器验收
+
+- 已在独立 SQLite/SIM 测试账号中完成：登录 → 上传510条评论 → 正式研究准备 → graph暂停 → 下载ZIP → 历史重开。下载归档62个文件哈希验证通过，含10个人工材料文件，500条有效评论，外部API调用0次。记录：`experiment/verification/browser_30c1aa61/download_verification.json`。
+- 本轮新截图：`docs/qa/v2-preparation-desktop-1440x1000.png`、`docs/qa/v2-preparation-mobile-390x844.png`、`docs/qa/original-preparation-smoke-1440x1000.png`。原有v2.0截图保留。桌面检查了状态、归档和历史入口；移动截图证明表单与暂停提示可读，没有横向溢出，不能据此声称所有状态字段都在同一屏可见。
+- 从展开桌面侧栏直接缩窄时，曾出现侧栏遮挡；重新进入移动布局后侧栏关闭。最后截图采用实际无遮挡状态。对已隐藏且位于视口外的收起按钮进行点击曾超时，该操作不计为通过；相关过程截图保留在浏览器验收目录。
+- 原站首页实际渲染成功；浏览器控制台错误0、警告0。上述只验证本地隔离流程；真实DeepSeek、生产登录、云数据库、Storage与付费图片均未验证。启动的本轮专用服务在验收后停止。
+
+## 2026-09-08 发布核验标识
+
+- 登录页在原有隐私说明下显示公开研究方法版本paper-repro-v2.1，沿用现有caption样式，未改变布局、登录或数据库行为。
+- tests.v2.test_research_release以AppTest验证版本可见且不初始化私有仓库；根部署依赖显式声明jsonschema/scipy/threadpoolctl。浏览器云端状态与推送commit另记在本次发布报告，不沿用上一轮截图冒充上线结果。

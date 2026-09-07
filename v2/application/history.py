@@ -50,9 +50,9 @@ class HistoryService:
         target_product: str | None = None,
     ) -> list[PipelineRun]:
         try:
-            return self.repository.list_pipeline_runs(limit, target_product=target_product)
+            return self.repository.list_pipeline_runs(limit, target_product=target_product, exclude_provider='research')
         except TypeError as exc:
-            if "target_product" not in str(exc):
+            if "target_product" not in str(exc) and "exclude_provider" not in str(exc):
                 raise
             legacy_limit = 200 if target_product else limit
             runs = self.repository.list_pipeline_runs(legacy_limit)

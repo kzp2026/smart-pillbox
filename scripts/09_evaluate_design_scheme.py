@@ -57,26 +57,20 @@ def ensure_ai_parameters(output_dir: Path, product_name: str) -> None:
 
 
 def calculate_score(indicator: str, ai_df: pd.DataFrame, scheme_text: str) -> int:
-    base = 82
+    """返回输入材料完整性自检分，不代表任何设计质量或专家意见。"""
+    del indicator  # 保留既有调用签名；自检不对各设计指标作质量判断。
+    nonempty_rows = 0
     if not ai_df.empty:
-        base += min(len(ai_df), 8)
-    if scheme_text:
-        base += 3
+        nonempty_rows = int(ai_df.fillna("").astype(str).apply(lambda row: row.str.strip().ne("").any(), axis=1).sum())
+    has_scheme_text = bool(scheme_text and scheme_text.strip())
 
-    text = scheme_text + " " + " ".join(ai_df.astype(str).head(8).to_numpy().ravel().tolist()) if not ai_df.empty else scheme_text
-    keyword_bonus = {
-        "需求匹配度": ["需求", "痛点", "评论", "参数"],
-        "适老化友好性": ["老人", "老年", "适老", "照护"],
-        "功能完整性": ["功能", "核心", "提醒", "支撑", "防滑"],
-        "结构合理性": ["结构", "装配", "支撑", "模块"],
-        "操作便利性": ["操作", "交互", "便捷", "简单"],
-        "材料可行性": ["材料", "工艺", "塑料", "金属", "软胶"],
-        "工程可行性": ["工程", "制造", "安装", "维护"],
-        "成本合理性": ["成本", "量产", "合理", "标准"],
-        "可优化性": ["优化", "迭代", "评价", "改进"],
-    }
-    base += sum(2 for keyword in keyword_bonus.get(indicator, []) if keyword in text)
-    return max(60, min(base, 96))
+    if not nonempty_rows and not has_scheme_text:
+        return 0
+
+    parameter_score = round(min(nonempty_rows, 8) / 8 * 60)
+    scheme_score = 25 if has_scheme_text else 0
+    need_score = 15 if "need" in ai_df.columns and ai_df["need"].fillna("").astype(str).str.strip().ne("").any() else 0
+    return parameter_score + scheme_score + need_score
 
 
 def build_evaluation_table(product_name: str, ai_df: pd.DataFrame, scheme_text: str) -> pd.DataFrame:
@@ -107,8 +101,9 @@ def build_evaluation_table(product_name: str, ai_df: pd.DataFrame, scheme_text: 
             {
                 "评价指标": indicator,
                 "分值": calculate_score(indicator, ai_df, scheme_text),
-                "评价说明": explanations[indicator],
+                "评价说明": f"材料完整性自检：{explanations[indicator]} 此分值不评价设计质量、效果或可行性。",
                 "优化建议": suggestions[indicator],
+                "来源": "自动规则自检（非专家评分）",
             }
             for indicator in EVALUATION_INDICATORS
         ]
@@ -125,7 +120,6 @@ def save_summary_docx(product_name: str, evaluation_df: pd.DataFrame, output_pat
         return
 
     average_score = round(float(evaluation_df["分值"].mean()), 1) if not evaluation_df.empty else 0
-    top_items = evaluation_df.sort_values("分值", ascending=False).head(3)["评价指标"].tolist() if not evaluation_df.empty else []
     weak_items = evaluation_df.sort_values("分值", ascending=True).head(3)["评价指标"].tolist() if not evaluation_df.empty else []
 
     doc = Document()
@@ -134,14 +128,14 @@ def save_summary_docx(product_name: str, evaluation_df: pd.DataFrame, output_pat
     normal._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
     normal.font.size = Pt(10.5)
 
-    doc.add_heading(f"{product_name}开题报告实验结果摘要", level=0)
+    doc.add_heading(f"{product_name}材料完整性自检摘要（非专家评分）", level=0)
     doc.add_paragraph(
-        "本系统以用户评论数据为输入，经过评论清洗、关键词提取、情感分析、主题聚类、需求映射和 Neo4j 知识图谱构建，"
-        "将需求信息转化为 AI 可识别的结构化生成参数，并进一步形成 Prompt 模板、设计方案、设计图片与方案评价结果。"
+        "本文件为自动规则自检（非专家评分），仅检查当前是否具备评论、参数和方案等材料，"
+        "不构成设计效果、工程可行性或用户体验的实证结论。"
     )
     doc.add_heading("一、技术路线", level=1)
     doc.add_paragraph("用户评论数据 → 需求提取 → 知识图谱关系路径 → AI 生成参数 → Prompt 模板 → 设计方案生成 → 方案评价与优化。")
-    doc.add_heading("二、实验输出", level=1)
+    doc.add_heading("二、流程预期材料（实际产物以归档为准）", level=1)
     for item in [
         "需求—功能—结构映射表",
         "AI 生成参数表与 JSON 参数",
@@ -150,13 +144,13 @@ def save_summary_docx(product_name: str, evaluation_df: pd.DataFrame, output_pat
         "方案评价表",
     ]:
         doc.add_paragraph(item, style="List Bullet")
-    doc.add_heading("三、评价结果摘要", level=1)
-    doc.add_paragraph(f"方案综合平均分为 {average_score} 分。优势指标包括：{ '、'.join(top_items) if top_items else '暂无' }。")
-    doc.add_paragraph(f"后续优化重点包括：{ '、'.join(weak_items) if weak_items else '暂无' }。")
-    doc.add_heading("四、开题报告支撑价值", level=1)
+    doc.add_heading("三、材料完整性自检结果", level=1)
+    doc.add_paragraph(f"材料完整性自检平均值为 {average_score} 分；该值不是专家评分，不表示优势或设计质量。")
+    doc.add_paragraph(f"待补充材料重点包括：{ '、'.join(weak_items) if weak_items else '暂无' }。")
+    doc.add_heading("四、后续验证边界", level=1)
     doc.add_paragraph(
-        "该结果可用于说明研究中的实验方案、系统流程和技术可行性：系统不是直接主观编写设计方案，"
-        "而是通过真实评论证据建立需求来源，再通过知识图谱关系路径转化为可调用的 AI 生成参数。"
+        "当前材料可用于说明系统流程与待验证假设。独立标注、真实专家/用户实验、原型测试与工程验证"
+        "仍需另行设计、实施和报告；本自检不能替代上述工作。"
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,12 +163,13 @@ def build_optimization_prompt(product_name: str, evaluation_df: pd.DataFrame, ai
     suggestions = [str(item.get("优化建议", "")) for item in weak_items if str(item.get("优化建议", "")).strip()]
     return f"""# {product_name}方案优化建议
 
-本文件用于形成“生成—评价—优化”闭环：先由用户评论数据生成 AI 参数和设计方案，再根据评价表低分项反向更新 Prompt 与设计参数。
+本文件用于形成“生成—材料完整性自检—待验证优化”流程。表内分值来自自动规则自检（非专家评分），
+仅反映当前材料是否齐备，不代表设计效果、工程可行性或已证实的用户价值。
 
 ## 重点需求
 {chr(10).join(f"- {need}" for need in needs) if needs else "- 暂无需求参数"}
 
-## 优先优化指标
+## 待补充材料项目
 {chr(10).join(f"- {item.get('评价指标')}：{item.get('分值')}分；{item.get('优化建议')}" for item in weak_items) if weak_items else "- 暂无评价结果"}
 
 ## 可复制优化 Prompt
@@ -184,8 +179,9 @@ def build_optimization_prompt(product_name: str, evaluation_df: pd.DataFrame, ai
 输出要求：
 1. 保留用户评论证据与需求来源。
 2. 明确更新功能参数、结构参数、材料参数和场景参数。
-3. 对低分评价指标逐项给出优化方案。
+3. 对材料完整性自检分较低的项目逐项补充待验证方案，不将该分值表述为实证评价。
 4. 继续体现：用户评论数据 → 需求提取 → 知识图谱关系路径 → AI 生成参数 → Prompt 模板 → 设计方案生成 → 方案评价与优化。
+5. 明确列出需要独立标注、真实专家/用户实验和原型/工程验证的假设与验证计划。
 """
 
 

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mapping paper-repro-v2.0",
+  "type": "object",
+  "required": [
+    "mapping_id",
+    "requirement_id",
+    "requirement_name",
+    "function_id",
+    "function_name",
+    "structure_id",
+    "structure_name",
+    "source_comment_ids",
+    "evidence_spans",
+    "mapping_reason",
+    "derivation_method",
+    "confidence",
+    "review_status",
+    "reviewer_id",
+    "reviewer_note",
+    "mapping_version"
+  ],
+  "properties": {
+    "mapping_id": {
+      "type": "string"
+    },
+    "requirement_id": {
+      "type": "string"
+    },
+    "requirement_name": {
+      "type": "string"
+    },
+    "function_id": {
+      "type": "string"
+    },
+    "function_name": {
+      "type": "string"
+    },
+    "structure_id": {
+      "type": "string"
+    },
+    "structure_name": {
+      "type": "string"
+    },
+    "source_comment_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "evidence_spans": {
+      "type": "array"
+    },
+    "mapping_reason": {
+      "type": "object"
+    },
+    "derivation_method": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "review_status": {
+      "type": "string"
+    },
+    "reviewer_id": {
+      "type": "string"
+    },
+    "reviewer_note": {
+      "type": "string"
+    },
+    "mapping_version": {
+      "type": "string"
+    }
+  }
+}

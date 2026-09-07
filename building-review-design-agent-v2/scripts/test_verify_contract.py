@@ -16,6 +16,14 @@ from verify_contract import (
 
 
 class ContractVerifierTests(unittest.TestCase):
+    def test_authoritative_reproducible_experiment_is_required(self) -> None:
+        for path in ('experiment/run_experiment.py','experiment/pipeline/service.py','v2/application/experiment.py','tests/test_experiment_pipeline.py'):
+            self.assertIn(path, REQUIRED_PATHS)
+    def test_research_evidence_contract_is_required(self) -> None:
+        self.assertIn('v2/application/research.py', REQUIRED_PATHS)
+        self.assertIn('v2/research/evaluation.py', REQUIRED_PATHS)
+        self.assertIn('tests/v2/test_research_service.py', REQUIRED_PATHS)
+
     def test_public_error_sanitizer_and_regression_test_are_required(self) -> None:
         self.assertIn("v2/ui/errors.py", REQUIRED_PATHS)
         self.assertIn("tests/v2/test_error_messages.py", REQUIRED_PATHS)

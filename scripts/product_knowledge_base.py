@@ -764,12 +764,15 @@ def generate_design_package(
     image_prompts = [asset["prompt"] for asset in visual_assets]
     image_prompt_text = image_prompts[0]
 
-    score = 45
-    score += min(evidence_count * 12, 30)
-    score += 15 if target_product else 0
-    score += 10 if len(demand_text) >= 12 else 0
-    score = min(score, 100)
-    status = "达标" if score >= 80 and not warnings else "需补充证据"
+    # Compatibility column only: a design draft has no independent quality score.
+    score = 0
+    status = "材料完整度检查（非方案质量）"
+    completeness_checks = {
+        "comment_evidence_present": bool(comments),
+        "requirement_evidence_present": bool(requirements),
+        "prompt_saved": bool(image_prompt_text),
+        "independent_evaluation_completed": False,
+    }
     return {
         "target_product": target_product,
         "demand_text": demand_text,
@@ -781,6 +784,7 @@ def generate_design_package(
         "industrial_design_constraints": normalized_constraints,
         "quality_score": score,
         "quality_status": status,
+        "completeness_checks": completeness_checks,
         "quality_report": {
             "evidence_count": evidence_count,
             "similar_product_count": len(products),
@@ -790,7 +794,7 @@ def generate_design_package(
                 "保留评论证据链",
                 "区分历史参考产品与目标产品",
                 "输出文本方案和写实渲染提示词",
-                "证据不足时阻止误判为高质量结果",
+                "仅检查材料完整度，不能判断设计质量或代替专家评价",
             ],
         },
     }

@@ -113,10 +113,10 @@ class GenerationServiceTests(unittest.TestCase):
         mapped = {item["requirement"]: item for item in graph["links"]}
         self.assertIn("提醒", mapped["提醒反馈"]["function"])
         self.assertIn("扬声器", mapped["提醒反馈"]["structure"])
-        self.assertIn("收纳", mapped["容量收纳"]["function"])
+        self.assertIn("分格", mapped["容量收纳"]["function"])
         self.assertIn("分格", mapped["容量收纳"]["structure"])
-        self.assertIn("外观", mapped["外观质感"]["function"])
-        self.assertIn("外壳", mapped["外观质感"]["structure"])
+        self.assertIn("形态", mapped["外观质感"]["function"])
+        self.assertIn("壳体", mapped["外观质感"]["structure"])
 
 
 if __name__ == "__main__":

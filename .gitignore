@@ -11,7 +11,16 @@ Thumbs.db
 
 # Virtual environment
 .venv/
+.venv-research/
+.research-cache/
+experiment/runs/
+experiment/verification/*/source/
+experiment/verification/browser_*/
+experiment/verification/
+.playwright-cli/
+.playwright/
 .test_deps/
+output/paper-validation-*/
 
 # Tools & binaries
 tools/

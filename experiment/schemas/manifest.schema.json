@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "manifest paper-repro-v2.0",
+  "type": "object",
+  "required": [
+    "run_id",
+    "started_at",
+    "finished_at",
+    "git_commit",
+    "workspace_dirty",
+    "python",
+    "operating_system",
+    "dependencies",
+    "input_path",
+    "input_sha256",
+    "counts",
+    "actual_algorithm",
+    "algorithm_parameters",
+    "random_seed",
+    "stages",
+    "provider",
+    "model",
+    "generation_parameters",
+    "prompts",
+    "retry_occurred",
+    "fallback_occurred",
+    "error_summary",
+    "artifacts",
+    "config_sha256",
+    "source_files",
+    "importance_formula"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "finished_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "git_commit": {
+      "type": "string"
+    },
+    "workspace_dirty": {
+      "type": "boolean"
+    },
+    "python": {
+      "type": "string"
+    },
+    "operating_system": {
+      "type": "string"
+    },
+    "dependencies": {
+      "type": "object"
+    },
+    "input_path": {
+      "type": "string"
+    },
+    "input_sha256": {
+      "type": "string"
+    },
+    "counts": {
+      "type": "object"
+    },
+    "actual_algorithm": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "algorithm_parameters": {
+      "type": "object"
+    },
+    "random_seed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "stages": {
+      "type": "object"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "generation_parameters": {
+      "type": "object"
+    },
+    "prompts": {
+      "type": "array"
+    },
+    "retry_occurred": {
+      "type": "boolean"
+    },
+    "fallback_occurred": {
+      "type": "boolean"
+    },
+    "error_summary": {
+      "type": "string"
+    },
+    "artifacts": {
+      "type": "array"
+    },
+    "config_sha256": {
+      "type": "string"
+    },
+    "source_files": {
+      "type": "object"
+    },
+    "importance_formula": {
+      "type": "object"
+    }
+  }
+}

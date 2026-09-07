@@ -50,7 +50,22 @@ The V2 entry point must resolve the repository root before importing the shared 
 
 ## 功能完整性
 
-V2 当前有 7 个真实阶段导航组：导入评论资产、需求生成、知识库概览、需求-功能-结构图谱、设计方案、工业设计 Prompt、AI 效果图；另有历史记录、设置与迁移，共 9 个导航页面。
+V2 当前有 7 个真实阶段导航组：导入评论资产、需求生成、知识库概览、需求-功能-结构图谱、设计方案、工业设计 Prompt、AI 效果图；另有论文实验中心、历史记录、设置与迁移，共 10 个导航页面。
+
+## 论文实验中心（2026-09-04）
+
+- `v2/ui/research.py` 提供独立正式入口；研究数据与设计结果不串用，设计历史/效果图不选择 provider=research 的运行。
+- `v2/research/dataset.py` 生成来源卡、SHA-256、稳定评论 ID、列映射和排除日志。来源字段为 platform/product_ref/collection_method/collected_at/date_range/sampling/permission_note/anonymization_note。自动遮盖手机号/邮箱不等于完整匿名化。
+- `v2/research/analysis.py` 运行中文字符 2–3 gram TF-IDF + KMeans、两种词典情感基线、可选 SnowNLP、全规则/首命中需求消融；显式记录实际方法、参数、依赖失败与有效主题数，不冒称 BERTopic。
+- `v2/research/evaluation.py` 按最终仲裁真值的 test ID 计算 Accuracy、macro P/R/F1、micro F1 与情感混淆矩阵；拒绝未知/重复 ID、非法标签和缺失预测。多标签 Accuracy 为集合精确匹配。用户必须声明 test 未用于训练调参。
+- 匿名专家/用户评分使用 1–5 整数量表、scheme_id、reviewer_id、role、dimension，拒绝重复评分；按方案/角色/维度汇总 mean 和样本 std（n<2 为 null）。关联方案保存原结果和证据快照。
+- `v2/application/research.py` 复用现有私有运行/结果/资产表，provider=research、model=paper-evidence-v1，无新生产 migration 或 Secrets。归档为 paper-evidence.zip，含 DOCX、PNG、CSV、JSON、manifest.json 逐文件哈希、环境清单与空白人工模板。导入候选方法预测必须填写 method_notes，复现时仅重放这些预测而非调用外部模型。
+- 实验历史、下载和再次复现均为显式操作。源上传不重复纳入论文归档，清洗样本是复现输入；没有人工证据时输出明确缺口，不生成专家高分或虚构准确率。
+- `scripts/09_evaluate_design_scheme.py` 的兼容输出新增“来源”列，旧四列和文件名保留；分值只作材料完整性自检，空输入为 0，不作为论文实证评价。
+- 新依赖 `matplotlib>=3.8.0`，沿用已部署的 python-docx 导出引擎。
+- 归档 `source/` 保存最小可运行源码白名单及逐文件摘要，`reproduce` 验证源码和数据 SHA-256 后重算；不包含 Secrets、账号原列或其他私有配置。独立复现需进入归档 `source` 目录。论文归档不通过旧十阶段 ZIP 恢复入口执行源码。
+- 仓库 `list_pipeline_runs` 支持 provider/exclude_provider 参数，SQL 先筛选再 LIMIT，研究与设计历史不会互相挤占列表。论文运行成功后更新当前产品上下文。
+- 论文运行不计入全局/产品的设计生成完成计数，不能使设计方案和 Prompt 阶段被误标为完成；档案总数仍包含论文包。
 
 底层必须继续覆盖 10 个旧研究阶段：评论清洗、关键词提取、情感分析、主题聚类、需求映射、Neo4j 图谱、AI 参数、设计方案、设计图片、方案评价。新增功能不得以删除旧阶段、旧文件兼容名、效果图槽位、历史打开、单文件下载、整包下载或安全恢复为代价。
 
@@ -112,3 +127,25 @@ V2 当前有 7 个真实阶段导航组：导入评论资产、需求生成、�
 ## 变更权限边界
 
 必须另行取得用户授权：修改原站数据结构、删除原站文件或历史数据、改变付费生成上限、增加新收费服务、切换 Supabase 项目、公开 Storage、改变单用户产品定位。
+
+## 权威论文实验服务（paper-repro-v2.1）
+
+用户于2026-09-05选择两种算法显式配置。唯一服务 experiment/pipeline/，CLI experiment/run_experiment.py 和 scripts/run_paper_experiment.py、V2 application/experiment.py 共用。experiment/runs/<run_id>/ 创建独立目录，stages/<stage>/<attempt>不可覆盖，manifest记录全参数、源码/输入/输出/嵌入模型哈希、环境和完整Prompt；不得读output中的最新同名文件。BERTopic本地固定多语言模型和KMeans均无静默回退。
+
+评论清洗510行审计保留500行，昵称仅在私有原始输入中，分析用匿名ID。semantics.py是共享需求命名与映射词典；规则输出pending_review或needs_naming，正式图谱只有approved，生成Prompt保存实际used_graph_paths。普通V2设计页可展示候选语义图谱，但明确无正式图谱证据；历史semantic-v2仅只读兼容。
+
+新增v2/ui/experiment.py嵌入既有论文实验中心，不新增顶层导航、数据库表、Secrets、迁移。新运行使用 provider=research/model=paper-repro-v2.1，旧 paper-repro-v2.0 历史保持只读可打开；两者均通过现有私有表和 Storage 持久化。每次用户新建请求生成 request_id，同一 request_id 重复提交返回原运行，不同 request_id 即使配置相同也创建新运行。失败和停在 graph 的 paused 运行都保存完整 ZIP、状态与可下载历史；失败记录 FAILED，paused 映射为 PARTIAL。归档回评与修改经安全解包/哈希检查创建子运行，继承父审核关系，原运行只读。页面显示方法/算法/证据/审核关系/生成模式/独立评价/闭环。原paper-evidence-v1历史读取不混入新正式结果。
+
+`experiment/config.example.json` 固定 mode=test/fake；`experiment/config.research.json` 固定 mode=research/DeepSeek。V2 网页允许明确查看真实 provider 选择，但正式研究按钮只执行到 graph，不调用文字模型，可导出人工审核材料。真实 A/B/C 生成仅从 CLI 传入已配置 provider 与显式本次付费授权；不得默认授权，也不得用 fake 输出冒充正式研究。
+
+A/B/C使用同一显式provider、模型、参数、任务、通用约束、格式、图片0张和重试规则；A为基础任务，B加入需求与代表评论，C仅再加入真实审核路径。测试用fake，正式研究用严格DeepSeek请求，默认每组5次；盲表隐藏组和版本，私有对应表隔离。六类人工模板、评分严格校验、ICC、Wilcoxon、Holm、效应量与V1V2变更链由experiment/evaluation提供。无真实数据或模拟fixture禁止结论。旧quality_score兼容列新生成为0，页面称自动材料检查；不得冒称设计达标。
+
+生成调用前写入 private/attempts 和 Prompt 文件，失败保留参数、重试次数和脱敏错误类型，停止下游；不生成替代方案。独立初次标注只提供原文，不展示规则答案；候选分类规范仅在初次标注封存后用于审核。V2上传默认识别评论内容列，避免将昵称列作为评论。
+
+论文实验中心默认展开正式入口；其下原有辅助表单显式标记为 legacy 历史兼容工具，不与正式 run 混用。
+
+正式运行、历史重开和评价/修改子运行成功后立即刷新，更新当前产品、七项状态及归档下载入口；无需额外点击其他控件。
+
+补充契约：10类为预定义规则辅助需求归纳，聚类只影响topic_id/topic_method。正式C无真实approved即阻止请求。严格provider来自现有v2/providers/text.py，正式模式禁止mock客户端、核对请求模型；保存HTTP请求体但不含Authorization。SDK无隐藏重试，已尝试真实发送的批次禁止从generation及上游自动重发；失败/未知结果也计入尝试数。输入差异与长度透明导出。V2停在graph时归档review_materials并逐文件哈希，重新计算上游后旧补充材料标为历史。request_id绑定输入/配置/产品内容摘要，避免跨产品误复用。统计默认描述/探索，主要指标需求匹配度预指定，取消固定5对结论开关。源码ZIP包括未跟踪文件，排除密钥与历史数据。
+
+发布核验：登录页仅显示公开METHOD_VERSION，不触发私有仓库初始化。根部署依赖显式包含jsonschema、scipy、threadpoolctl；精确研究环境仍以experiment锁文件为准。现有Streamlit应用更新不改变Secrets或schema；只发布审阅的源码/测试/文档，不发布本地run、验证日志或用户输出。

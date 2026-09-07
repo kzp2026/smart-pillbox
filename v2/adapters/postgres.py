@@ -308,26 +308,26 @@ class KnowledgeRepository:
         self,
         limit: int = 50,
         target_product: str | None = None,
+        provider: str | None = None,
+        exclude_provider: str | None = None,
     ) -> list[PipelineRun]:
         safe_limit = max(1, min(int(limit), 200))
         product = clean_text(target_product or "")
+        filters = ['owner_id = ?']
+        parameters: list[object] = [self.owner_id]
+        if product:
+            filters.append('target_product = ?')
+            parameters.append(product)
+        if provider:
+            filters.append('provider = ?')
+            parameters.append(clean_text(provider))
+        if exclude_provider:
+            filters.append('provider != ?')
+            parameters.append(clean_text(exclude_provider))
+        parameters.append(safe_limit)
         with self.connect() as connection:
-            if product:
-                rows = connection.execute(
-                    self._sql(
-                        "SELECT * FROM pipeline_runs WHERE owner_id = ? AND target_product = ? "
-                        "ORDER BY updated_at DESC LIMIT ?"
-                    ),
-                    (self.owner_id, product, safe_limit),
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    self._sql(
-                        "SELECT * FROM pipeline_runs WHERE owner_id = ? "
-                        "ORDER BY updated_at DESC LIMIT ?"
-                    ),
-                    (self.owner_id, safe_limit),
-                ).fetchall()
+            rows = connection.execute(self._sql('SELECT * FROM pipeline_runs WHERE '+
+                                      ' AND '.join(filters)+' ORDER BY updated_at DESC LIMIT ?'),tuple(parameters)).fetchall()
         return [self._pipeline_from_row(row) for row in rows]
 
     def update_pipeline_run(
@@ -747,7 +747,8 @@ class KnowledgeRepository:
                     "(SELECT COUNT(*) FROM products WHERE owner_id = ?) AS product_count, "
                     "(SELECT COUNT(*) FROM comments WHERE owner_id = ?) AS comment_count, "
                     "(SELECT COUNT(*) FROM requirements WHERE owner_id = ?) AS requirement_count, "
-                    "(SELECT COUNT(*) FROM generation_runs WHERE owner_id = ?) AS generation_run_count, "
+                    "(SELECT COUNT(*) FROM generation_runs gr JOIN pipeline_runs pr ON pr.id = gr.pipeline_run_id "
+                    " WHERE gr.owner_id = ? AND pr.owner_id = gr.owner_id AND pr.provider != 'research') AS generation_run_count, "
                     "(SELECT COUNT(*) FROM artifacts WHERE owner_id = ?) AS artifact_count, "
                     "(SELECT COUNT(*) FROM artifacts WHERE owner_id = ? AND kind = ?) AS image_count"
                 ),
@@ -785,7 +786,7 @@ class KnowledgeRepository:
                     "(SELECT COUNT(*) FROM requirements r JOIN products p ON p.id = r.product_id "
                     " WHERE r.owner_id = ? AND p.owner_id = ? AND p.name = ?) AS requirement_count, "
                     "(SELECT COUNT(*) FROM pipeline_runs pr "
-                    " WHERE pr.owner_id = ? AND pr.target_product = ?) AS generation_run_count, "
+                    " WHERE pr.owner_id = ? AND pr.target_product = ? AND pr.provider != 'research') AS generation_run_count, "
                     "(SELECT COUNT(*) FROM artifacts a JOIN pipeline_runs pr ON pr.id = a.pipeline_run_id "
                     " WHERE a.owner_id = ? AND pr.owner_id = ? AND pr.target_product = ?) AS artifact_count, "
                     "(SELECT COUNT(*) FROM artifacts a JOIN pipeline_runs pr ON pr.id = a.pipeline_run_id "

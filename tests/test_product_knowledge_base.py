@@ -195,8 +195,9 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
             context=context,
         )
 
-        self.assertGreaterEqual(package["quality_score"], 80)
-        self.assertEqual(package["quality_status"], "达标")
+        self.assertEqual(package["quality_score"], 0)
+        self.assertEqual(package["quality_status"], "材料完整度检查（非方案质量）")
+        self.assertTrue(package["completeness_checks"]["comment_evidence_present"])
         self.assertIn("评论证据", package["design_text"])
         self.assertIn("定时提醒", package["design_text"])
         self.assertIn("智能水杯", package["image_prompt_text"])
@@ -237,7 +238,7 @@ class ProductKnowledgeBaseTests(unittest.TestCase):
         )
 
         self.assertLess(package["quality_score"], 80)
-        self.assertEqual(package["quality_status"], "需补充证据")
+        self.assertEqual(package["quality_status"], "材料完整度检查（非方案质量）")
         self.assertIn("当前知识库证据不足", package["quality_report"]["warnings"][0])
 
     def test_generation_package_injects_industrial_design_constraints_into_visual_prompts(self) -> None:

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "requirement paper-repro-v2.0",
+  "type": "object",
+  "required": [
+    "requirement_id",
+    "requirement_name",
+    "requirement_description",
+    "source_comment_ids",
+    "source_evidence_spans",
+    "keywords",
+    "topic_id",
+    "topic_method",
+    "sentiment_summary",
+    "frequency",
+    "importance_score",
+    "importance_components",
+    "derivation_method",
+    "review_status",
+    "reviewer_note"
+  ],
+  "properties": {
+    "requirement_id": {
+      "type": "string"
+    },
+    "requirement_name": {
+      "type": "string"
+    },
+    "requirement_description": {
+      "type": "string"
+    },
+    "source_comment_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "source_evidence_spans": {
+      "type": "array"
+    },
+    "keywords": {
+      "type": "array"
+    },
+    "topic_id": {
+      "type": "array"
+    },
+    "topic_method": {
+      "type": "string"
+    },
+    "sentiment_summary": {
+      "type": "object"
+    },
+    "frequency": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "importance_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "importance_components": {
+      "type": "object"
+    },
+    "derivation_method": {
+      "type": "string"
+    },
+    "review_status": {
+      "type": "string"
+    },
+    "reviewer_note": {
+      "type": "string"
+    }
+  }
+}

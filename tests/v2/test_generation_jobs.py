@@ -132,7 +132,8 @@ class GenerationJobRegistryTests(unittest.TestCase):
             result = json.loads(str(detail["result_json"]))
             self.assertTrue(result["design_text"].strip())
             self.assertTrue(result["industrial_design_prompt"].strip())
-            self.assertEqual(result["quality_status"], "达标")
+            self.assertEqual(result["quality_status"], "材料完整度检查（非方案质量）")
+            self.assertEqual(detail["quality_status"], "artifact_completeness_only")
             self.assertGreaterEqual(result["quality_report"]["evidence_count"], 4)
             self.assertEqual(
                 [item["label"] for item in result["visual_assets"]],
@@ -148,7 +149,7 @@ class GenerationJobRegistryTests(unittest.TestCase):
                 ],
             )
             graph = result["requirement_function_structure_graph"]
-            self.assertEqual(graph["version"], "semantic-v2")
+            self.assertEqual(graph["version"], "rfs-candidate-v2")
             self.assertEqual(len(graph["links"]), 4)
             self.assertEqual(len({item["function"] for item in graph["links"]}), 4)
             self.assertEqual(len({item["structure"] for item in graph["links"]}), 4)

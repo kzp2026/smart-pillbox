@@ -1,6 +1,16 @@
 ﻿# 用户评论驱动的产品设计生成系统
 
-本项目用于研究生课题实验：**基于用户评论数据的产品设计研究**。新版主入口已升级为“产品评论知识库智能体”：先把导入过的评论长期沉淀为私人产品设计数据库，后续只输入新产品需求，就能检索历史评论证据并生成产品设计方案、写实渲染提示词和效果图。
+**论文正式实验入口为 `experiment/run_experiment.py`，方法版本 `paper-repro-v2.1`。** 原站入口 `app.py`，私有 V2 入口 `v2/app.py`，旧命令行入口 `scripts/run_paper_experiment.py` 调用同一研究服务。新运行保存在 `experiment/runs/<run_id>/` 并生成 `run_manifest.json`；原有 `output/` 保留为 legacy 历史结果，不与正式实验混用。
+
+**旧自动分数不是方案质量评价或专家评价。BERTopic 和 KMeans 不得静默混用。** 配置必须明确选择实际算法，缺依赖/模型或执行失败立即停止。正式图谱仅使用审核通过的关系；没有人工审核时显示“无正式图谱证据”。当前 A/B/C 验收使用 fake provider，默认各5次、图片0张，不调用收费模型；fake输出及模拟评分不能用来声称设计有效。
+
+```powershell
+python experiment/run_experiment.py --config experiment/config.example.json --input data/京东智能药盒评论.csv
+```
+
+固定环境与重跑：[REPRODUCING.md](REPRODUCING.md)；方法边界：[METHODS.md](METHODS.md)；数据审计：[DATA_CARD.md](DATA_CARD.md)；人工审核、盲评及V1—V2：[EVALUATION.md](EVALUATION.md)。下文旧十阶段仅用于原站兼容。
+
+本项目用于研究生课题实验：**基于用户评论数据的产品设计研究**。产品评论知识库负责私有评论管理、历史、方案和图片；正式研究真值来自独立实验服务，候选设计和历史自动自检不等同于专家证据。
 
 旧版“单次上传 → 一键生成全部研究结果”已保留：
 - Streamlit 侧边栏页面：`01_现有流程备份`
@@ -43,13 +53,13 @@ PRODUCT_KB_DATABASE_URL = "postgresql://user:password@host:5432/postgres"
 | 01 评论清洗 | 读取+清洗评论，分词 | `cleaned_comments.xlsx` |
 | 02 关键词提取 | TF-IDF 用户需求关键词 | `需求关键词提取结果.xlsx` |
 | 03 情感分析 | 中文评论情感与痛点识别 | `情感分析结果.xlsx` |
-| 04 主题聚类 | BERTopic/KMeans 主题聚类 | `BERTopic主题聚类结果.xlsx` |
+| 04 主题聚类 | 明确选择算法，失败停止 | `BERTopic主题聚类结果.xlsx` 或 `KMeans_TFIDF主题聚类结果.xlsx`，按实际算法 |
 | 05 需求映射 | 需求→功能→结构自动映射 | `{产品名}_需求功能映射数据库.xlsx` |
 | 06 Neo4j图谱 | 知识图谱节点、关系、Cypher | `neo4j_nodes.csv` 等 |
 | 07 AI生成参数 | 需求、功能、结构转 AI 可识别参数 | `AI生成参数表.xlsx`、`ai_generation_parameters.json` |
 | 08 设计方案 | 产品设计文字方案 | `{产品名}产品设计方案.docx` |
 | 09 设计图片 | 产品效果图+爆炸图+细节图+三视图+设计展板+产品使用效果图 | `design_images/` |
-| 10 方案评价 | 方案评分、优化建议、开题报告摘要 | `方案评价表.xlsx`、`方案优化建议.txt`、`开题报告实验结果摘要.docx` |
+| 10 材料自检 | 自动完整度检查，不是专家评价 | 兼容保留 `方案评价表.xlsx`、`方案优化建议.txt`、`开题报告实验结果摘要.docx` |
 
 核心技术路线为：**用户评论数据 → 需求提取 → 知识图谱关系路径 → AI 生成参数 → Prompt 模板 → 设计方案生成 → 方案评价与优化**。
 
@@ -115,7 +125,7 @@ DEEPSEEK_MODEL = "deepseek-v4-flash"
 ## 5. 环境安装
 ```bash
 pip install -r requirements.txt
-pip install bertopic      # 可选，失败时自动切换 KMeans
+# 正式实验使用 experiment/requirements.lock.txt 固定环境，算法失败不回退
 ```
 
 `openai` 已包含在 `requirements.txt` 中，用于 DeepSeek 和其他 OpenAI 兼容接口。

@@ -335,38 +335,15 @@ def load_cleaned_or_build(input_path: str | Path | None, output_dir: Path) -> pd
 # =========================
 
 def auto_generate_mapping_rules(topic_df: pd.DataFrame) -> list[dict]:
-    """根据主题聚类结果自动生成需求-功能-结构映射规则。
-    每个主题聚类对应一条规则，功能和结构从关键词推导。"""
-    rules = []
-    if topic_df.empty:
-        return rules
-
-    for _, row in topic_df.head(12).iterrows():
-        topic_name = str(row.get("主题名称", ""))
-        topic_keywords = str(row.get("主题关键词", ""))
-        if not topic_name or topic_name == "nan":
-            continue
-
-        # 提取关键词列表
-        kw_list = [k.strip() for k in re.split(r"[，,、\s]+", topic_keywords) if k.strip()]
-
-        # 生成简短的功能和结构描述
-        function_desc = f"满足用户对“{topic_name}”的需求"
-        structure_desc = f"支持“{topic_name}”的产品结构模块"
-        if kw_list:
-            top_term = kw_list[0]
-            function_desc = f"增强型{top_term}功能模块"
-            structure_desc = f"集成{top_term}的产品结构单元"
-
-        rules.append({
-            "category": topic_name,
-            "terms": kw_list[:5],
-            "function": f"{topic_name}优化功能",
-            "structure": f"{topic_name}支撑结构",
-            "description": f"响应“{topic_name}”相关用户需求，通过优化功能和结构提升产品体验。",
-        })
-
-    return rules
+    """Legacy candidate projection; use shared semantic goals, never topic-number templates."""
+    from experiment.pipeline.semantics import matches
+    found={}
+    for _, row in topic_df.iterrows():
+        for key,name,terms,function,structure in matches(str(row.get("主题关键词", ""))):
+            found[key] = {"category":name,"terms":list(terms),"function":function,"structure":structure,
+                          "description":"关键词规则设计推导候选；无逐条评论证据时不得作为正式研究关系。",
+                          "review_status":"pending_review"}
+    return list(found.values())
 
 
 # =========================

@@ -1,208 +1,41 @@
+"""Legacy Excel projection of the authoritative candidate mappings; not an expert-reviewed graph."""
 from __future__ import annotations
-
 import argparse
+import json
+import sys
 from pathlib import Path
-
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import pandas as pd
-
-from common import (
-    auto_generate_mapping_rules,
-    as_project_path,
-    compute_tfidf,
-    ensure_output_dir,
-    load_cleaned_or_build,
-    resolve_latest_output_path,
-    save_workbook,
-    split_words,
-    stable_id,
-)
+from common import ensure_output_dir,save_workbook
+from experiment.pipeline.semantics import derive_requirements,candidate_mappings
+from experiment.pipeline.io import table,write_json
 
 
-def read_excel_sheet(path: Path, sheet_name: str) -> pd.DataFrame:
-    path = resolve_latest_output_path(path)
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        return pd.read_excel(path, sheet_name=sheet_name)
-    except Exception:
-        return pd.DataFrame()
+def main():
+    parser=argparse.ArgumentParser(description='Legacy需求映射投影；论文权威入口为 experiment/run_experiment.py')
+    parser.add_argument('--output-dir',default='output');parser.add_argument('--product-name',default='产品')
+    args=parser.parse_args();out=ensure_output_dir(args.output_dir)
+    cleaned=out/'cleaned_comments.xlsx'
+    if not cleaned.exists():raise FileNotFoundError('指定目录缺少 cleaned_comments.xlsx；禁止从其他目录补读')
+    frame=pd.read_excel(cleaned)
+    rows=[dict(comment_id=f'C{i+1:04d}',cleaned_comment=str(t)) for i,t in enumerate(frame['clean_comment'])]
+    topic_path=out/'topic_method.json'
+    if not topic_path.exists():raise FileNotFoundError('请先在同目录完成明确算法的04阶段，不能读取legacy主题文件代替')
+    topics=json.loads(topic_path.read_text(encoding='utf-8'))
+    reqs=derive_requirements(rows,topics);mappings=candidate_mappings(reqs)
+    def projected(items):
+        return pd.DataFrame([{k:json.dumps(v,ensure_ascii=False) if isinstance(v,(dict,list)) else v for k,v in r.items()} for r in items])
+    req_rows=[dict(r,req_id=r['requirement_id'],需求名称=r['requirement_name'],需求类别=r['catalog_key'],需求描述=r['requirement_description'],来源关键词='、'.join(r['keywords']),重要度=r['importance_score']) for r in reqs]
+    save_workbook(out/f'{args.product_name}_需求功能映射数据库.xlsx',{
+        '用户需求表':projected(req_rows),
+        '产品功能表':projected([dict(func_id=r['function_id'],功能名称=r['function_name'],review_status='pending_review') for r in mappings]),
+        '产品结构表':projected([dict(structure_id=r['structure_id'],结构名称=r['structure_name'],review_status='pending_review') for r in mappings]),
+        '需求功能映射':projected([dict(req_id=r['requirement_id'],func_id=r['function_id'],映射理由=r['mapping_reason']['requirement_to_function'],review_status='pending_review',source_comment_ids=r['source_comment_ids']) for r in mappings]),
+        '功能结构映射':projected([dict(func_id=r['function_id'],structure_id=r['structure_id'],映射理由=r['mapping_reason']['function_to_structure'],review_status='pending_review') for r in mappings]),
+        '主题需求映射':pd.DataFrame(columns=['topic_id','req_id','映射依据']),
+        '设计机会点':projected([dict(设计机会点=r['requirement_name'],建议功能=r['function_name'],建议结构=r['structure_name'],论文实验解释='规则设计推导候选，未经过专家审核') for r in mappings]),
+        '研究边界':pd.DataFrame([{'状态':'legacy兼容投影','说明':'不是正式图谱；仅experiment/run_experiment.py的approved关系可作为图谱驱动证据'}])})
+    write_json(out/'legacy_mapping_candidates.json',mappings)
+    print(f'共享规则需求候选：{len(reqs)}；映射候选：{len(mappings)}；正式审核关系：0')
 
-
-def keyword_matches_rule(keyword: str, rule: dict) -> bool:
-    lowered = str(keyword).lower()
-    return any(term.lower() in lowered or lowered in term.lower() for term in rule.get("terms", []))
-
-
-def collect_keyword_data(output_dir: Path) -> pd.DataFrame:
-    keyword_path = output_dir / "需求关键词提取结果.xlsx"
-    keyword_df = read_excel_sheet(keyword_path, "关键词排名")
-    if not keyword_df.empty:
-        return keyword_df
-    cleaned_df = load_cleaned_or_build(None, output_dir)
-    tokens_list = [split_words(value) for value in cleaned_df["words"]]
-    return compute_tfidf(tokens_list, max_features=80, min_df=2)
-
-
-def collect_sentiment_data(output_dir: Path) -> pd.DataFrame:
-    sentiment_path = output_dir / "情感分析结果.xlsx"
-    return read_excel_sheet(sentiment_path, "关键词情感统计")
-
-
-def collect_topic_data(output_dir: Path) -> pd.DataFrame:
-    topic_path = output_dir / "BERTopic主题聚类结果.xlsx"
-    return read_excel_sheet(topic_path, "主题汇总")
-
-
-def rows_to_dataframe(rows: list[dict]) -> pd.DataFrame:
-    """把行数据安全转换为 DataFrame，避免直接用 DataFrame 做布尔判断。"""
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="第五阶段：构建需求-功能-结构映射数据库")
-    parser.add_argument("--output-dir", default="output", help="输出目录")
-    parser.add_argument("--product-name", default="产品", help="产品名称（用于输出文件名和内容）")
-    args = parser.parse_args()
-
-    product_name = args.product_name
-    output_dir = ensure_output_dir(args.output_dir)
-    keyword_df = collect_keyword_data(output_dir)
-    sentiment_df = collect_sentiment_data(output_dir)
-    topic_df = collect_topic_data(output_dir)
-
-    # 从主题聚类自动生成映射规则
-    mapping_rules = auto_generate_mapping_rules(topic_df)
-
-    sentiment_map = {}
-    if not sentiment_df.empty and "关键词" in sentiment_df.columns:
-        for _, row in sentiment_df.iterrows():
-            sentiment_map[str(row.get("关键词", ""))] = {
-                "平均情感分": row.get("平均情感分", ""),
-                "主要情感倾向": row.get("主要情感倾向", ""),
-                "负向评论数": row.get("负向评论数", 0),
-                "正向评论数": row.get("正向评论数", 0),
-            }
-
-    requirement_rows = []
-    function_rows = []
-    structure_rows = []
-    req_func_rows = []
-    func_struct_rows = []
-    topic_req_rows = []
-    opportunity_rows = []
-
-    function_seen = {}
-    structure_seen = {}
-
-    for rule in mapping_rules:
-        matched_keywords = []
-        tfidf_score = 0.0
-        doc_freq = 0
-        negative_count = 0
-        positive_count = 0
-
-        if not keyword_df.empty:
-            for _, row in keyword_df.iterrows():
-                keyword = str(row.get("关键词", ""))
-                if keyword_matches_rule(keyword, rule):
-                    matched_keywords.append(keyword)
-                    tfidf_score += float(row.get("TF-IDF权重", 0) or 0)
-                    doc_freq += int(row.get("文档频次", 0) or 0)
-                    sentiment = sentiment_map.get(keyword, {})
-                    negative_count += int(sentiment.get("负向评论数", 0) or 0)
-                    positive_count += int(sentiment.get("正向评论数", 0) or 0)
-
-        req_id = stable_id("REQ", rule["category"])
-        func_id = function_seen.setdefault(rule["function"], stable_id("FUNC", rule["function"]))
-        structure_id = structure_seen.setdefault(rule["structure"], stable_id("STRU", rule["structure"]))
-
-        importance = round(tfidf_score * 100 + doc_freq * 0.2 + negative_count * 1.5, 4)
-        if importance == 0:
-            importance = 1.0
-
-        sentiment_label = "痛点优先" if negative_count > 0 else "满意保持" if positive_count > 0 else "规则补充"
-        keyword_text = "、".join(dict.fromkeys(matched_keywords)) if matched_keywords else "主题聚类推导"
-
-        requirement_rows.append({
-            "req_id": req_id,
-            "需求名称": rule["category"],
-            "需求类别": rule["category"],
-            "来源关键词": keyword_text,
-            "需求描述": rule["description"],
-            "情感倾向": sentiment_label,
-            "重要度": importance,
-            "负向评论数": negative_count,
-            "正向评论数": positive_count,
-        })
-
-        if rule["function"] not in {row.get("功能名称") for row in function_rows}:
-            function_rows.append({
-                "func_id": func_id,
-                "功能名称": rule["function"],
-                "功能类别": rule["category"],
-                "功能描述": rule["description"],
-                "设计目标": f"响应“{rule['category']}”，提升{product_name}使用体验。",
-                "优先级": 1 if negative_count > 0 else 2,
-            })
-
-        if rule["structure"] not in {row.get("结构名称") for row in structure_rows}:
-            structure_rows.append({
-                "structure_id": structure_id,
-                "结构名称": rule["structure"],
-                "结构类型": rule["category"],
-                "结构描述": f"用于实现“{rule['function']}”的关键结构配置。",
-            })
-
-        req_func_rows.append({
-            "req_id": req_id,
-            "func_id": func_id,
-            "映射理由": f"{rule['category']}可通过{rule['function']}实现。",
-            "映射强度": importance,
-        })
-
-        func_struct_rows.append({
-            "func_id": func_id,
-            "structure_id": structure_id,
-            "映射理由": f"{rule['function']}依赖{rule['structure']}。",
-        })
-
-        opportunity_rows.append({
-            "设计机会点": rule["category"],
-            "证据关键词": keyword_text,
-            "建议功能": rule["function"],
-            "建议结构": rule["structure"],
-            "论文实验解释": "由用户评论关键词、情感倾向和主题聚类共同推导。",
-        })
-
-        if not topic_df.empty:
-            for _, topic in topic_df.iterrows():
-                topic_keywords = str(topic.get("主题关键词", ""))
-                if any(term in topic_keywords for term in rule.get("terms", [])):
-                    topic_req_rows.append({
-                        "topic_id": topic.get("topic_id", ""),
-                        "主题关键词": topic_keywords,
-                        "req_id": req_id,
-                        "需求名称": rule["category"],
-                        "映射依据": "主题关键词命中需求规则",
-                    })
-
-    output_path = output_dir / f"{product_name}_需求功能映射数据库.xlsx"
-    save_workbook(output_path, {
-        "用户需求表": pd.DataFrame(requirement_rows).sort_values("重要度", ascending=False) if requirement_rows else pd.DataFrame(),
-        "产品功能表": rows_to_dataframe(function_rows),
-        "产品结构表": rows_to_dataframe(structure_rows),
-        "需求功能映射": rows_to_dataframe(req_func_rows),
-        "功能结构映射": rows_to_dataframe(func_struct_rows),
-        "主题需求映射": rows_to_dataframe(topic_req_rows),
-        "设计机会点": rows_to_dataframe(opportunity_rows),
-    })
-
-    print(f"产品名称：{product_name}")
-    print(f"需求数量：{len(requirement_rows)}")
-    print(f"功能数量：{len(function_rows)}")
-    print(f"结构数量：{len(structure_rows)}")
-    print(f"已生成：{output_path}")
-
-
-if __name__ == "__main__":
-    main()
+if __name__=='__main__':main()

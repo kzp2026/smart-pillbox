@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "generation paper-repro-v2.0",
+  "type": "object",
+  "required": [
+    "run_id",
+    "generation_id",
+    "scheme_id",
+    "group",
+    "provider",
+    "model",
+    "called_at",
+    "parameters",
+    "system_prompt",
+    "user_prompt",
+    "used_comment_ids",
+    "used_requirement_ids",
+    "used_graph_paths",
+    "raw_response",
+    "response_sha256",
+    "retry_count",
+    "used_offline_template",
+    "error",
+    "result_version",
+    "mode",
+    "is_real_ai"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string"
+    },
+    "generation_id": {
+      "type": "string"
+    },
+    "scheme_id": {
+      "type": "string"
+    },
+    "group": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "called_at": {
+      "type": "string"
+    },
+    "parameters": {
+      "type": "object"
+    },
+    "system_prompt": {
+      "type": "string"
+    },
+    "user_prompt": {
+      "type": "string"
+    },
+    "used_comment_ids": {
+      "type": "array"
+    },
+    "used_requirement_ids": {
+      "type": "array"
+    },
+    "used_graph_paths": {
+      "type": "array"
+    },
+    "raw_response": {
+      "type": "string"
+    },
+    "response_sha256": {
+      "type": "string"
+    },
+    "retry_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "used_offline_template": {
+      "type": "boolean"
+    },
+    "error": {
+      "type": "string"
+    },
+    "result_version": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string"
+    },
+    "is_real_ai": {
+      "type": "boolean"
+    }
+  }
+}

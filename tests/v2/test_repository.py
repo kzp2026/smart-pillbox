@@ -13,6 +13,21 @@ from v2.domain.models import CreateRunCommand, RunStatus
 
 
 class KnowledgeRepositoryTests(unittest.TestCase):
+    def test_provider_filter_precedes_limit(self):
+        self.repo.create_pipeline_run(CreateRunCommand('A','设计','offline','rules',0),'design-old')
+        for i in range(5):
+            self.repo.create_pipeline_run(CreateRunCommand('A','论文','research','paper',0),f'research-{i}')
+        self.assertIn('exclude_provider',inspect.signature(self.repo.list_pipeline_runs).parameters)
+        result=self.repo.list_pipeline_runs(1,target_product='A',exclude_provider='research')
+        self.assertEqual([r.provider for r in result],['offline'])
+        self.assertEqual(self.repo.list_pipeline_runs(1,target_product='A',provider='research')[0].provider,'research')
+
+    def test_paper_runs_do_not_mark_design_generation_complete(self):
+        run=self.repo.create_pipeline_run(CreateRunCommand('A','论文','research','paper',0),'paper-progress')
+        self.repo.save_generation_run(run.id,'{}','{"research":{}}',0,'research_not_design_score')
+        self.assertEqual(self.repo.workspace_snapshot().generation_run_count,0)
+        self.assertEqual(self.repo.product_workspace_snapshot('A').generation_run_count,0)
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         database_path = Path(self.temp_dir.name) / "agent_v2.sqlite3"

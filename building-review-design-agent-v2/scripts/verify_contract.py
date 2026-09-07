@@ -14,6 +14,33 @@ SKILL_NAME = "building-review-design-agent-v2"
 SYNC_MARKER = "skill-sync:building-review-design-agent-v2"
 
 REQUIRED_PATHS = (
+    "experiment/run_experiment.py",
+    "experiment/pipeline/service.py",
+    "experiment/pipeline/semantics.py",
+    "experiment/pipeline/graph.py",
+    "experiment/pipeline/topics.py",
+    "experiment/evaluation/statistics.py",
+    "experiment/evaluation/templates.py",
+    "experiment/evaluation/loop.py",
+    "experiment/config.example.json",
+    "experiment/config.research.json",
+    "experiment/requirements.lock.txt",
+    "experiment/models/embedding_manifest.json",
+    "experiment/schemas/manifest.schema.json",
+    "v2/application/experiment.py",
+    "v2/ui/experiment.py",
+    "tests/test_experiment_pipeline.py",
+    "tests/test_experiment_integrity.py",
+    "tests/test_experiment_final_guards.py",
+    "tests/test_experiment_evaluation.py",
+    "tests/test_experiment_legacy.py",
+    "tests/v2/test_experiment_integration.py",
+    "tests/v2/test_experiment_ui.py",
+    "experiment/verification/phase2/v2-report.md",
+    "REPRODUCING.md",
+    "METHODS.md",
+    "DATA_CARD.md",
+    "EVALUATION.md",
     "AGENTS.md",
     "app.py",
     "app_legacy_current.py",
@@ -28,6 +55,20 @@ REQUIRED_PATHS = (
     "v2/application/generation_jobs.py",
     "v2/application/runtime_state.py",
     "v2/application/visual_quality.py",
+    "v2/application/research.py",
+    "v2/research/dataset.py",
+    "v2/research/analysis.py",
+    "v2/research/evaluation.py",
+    "v2/research/report.py",
+    "v2/research/reproduce.py",
+    "v2/research/provenance.py",
+    "scripts/verify_paper_evidence.py",
+    "docs/V2_PAPER_EXPERIMENTS.md",
+    "v2/ui/research.py",
+    "tests/v2/test_research_dataset.py",
+    "tests/v2/test_research_evaluation.py",
+    "tests/v2/test_research_service.py",
+    "tests/v2/test_research_ui.py",
     "v2/assets/studio-background.webp",
     "v2/assets/ai-brand-mark.webp",
     "v2/ui/errors.py",
@@ -135,6 +176,26 @@ def verify_static(root: Path) -> list[str]:
     if count_top_level_tuple_items(app_source, "STAGE_NAV_ITEMS") != 7:
         errors.append("V2 页面阶段导航数量不再是 7。")
     app_tree = ast.parse(app_source)
+    if '"论文实验中心"' not in app_source or 'render_research(st, repository, store' not in app_source:
+        errors.append('论文实验中心导航或已登录入口缺失。')
+    research_source = (root / 'v2/research/evaluation.py').read_text(encoding='utf-8')
+    for marker in ('evaluate_predictions', 'summarize_reviews', 'test_ids_sha256', 'math.isfinite', 'readiness'):
+        if marker not in research_source:
+            errors.append(f'论文证据验证契约缺失：{marker}')
+    experiment_app_source = (root / "v2/application/experiment.py").read_text(encoding="utf-8")
+    experiment_ui_source = (root / "v2/ui/experiment.py").read_text(encoding="utf-8")
+    for marker in ("request_id", "stop_after", "provider=provider", "RunStatus.PARTIAL", "paper-repro-v2.1"):
+        if marker not in experiment_app_source:
+            errors.append(f"V2 论文实验持久化契约缺少：{marker}")
+    for marker in ("准备研究材料（停在图谱）", "load_research_config", "v2_repro_request_id", "真实文字模型"):
+        if marker not in experiment_ui_source:
+            errors.append(f"V2 论文实验 UI 契约缺少：{marker}")
+    strict_source=(root/'v2/providers/text.py').read_text(encoding='utf-8')
+    for marker in ('strict_request','generate_strict','NoRedirect'):
+        if marker not in strict_source:errors.append('严格研究provider契约缺少：'+marker)
+    generation_source=(root/'experiment/pipeline/generation.py').read_text(encoding='utf-8')
+    for marker in ('validate_generation_gate','actual_request','input_lengths','transport_test'):
+        if marker not in generation_source:errors.append('真实实验生成记录契约缺少：'+marker)
     direct_domain_imports = {
         alias.name
         for node in app_tree.body
@@ -265,6 +326,12 @@ def verify_static(root: Path) -> list[str]:
     if "auth.uid()" in schema_source:
         errors.append("检测到 Supabase Auth 多租户策略；本项目使用固定服务器 owner。")
 
+    if 'st_module.caption(f"研究方法：{METHOD_VERSION}")' not in app_source:
+        errors.append("V2 登录页缺少公开研究方法版本，无法核验发布版本。")
+    dependency_text = (root / "requirements.txt").read_text(encoding="utf-8")
+    for package in ("jsonschema", "scipy", "threadpoolctl"):
+        if not any(line.startswith(package + ">=") or line.startswith(package + "==") for line in dependency_text.splitlines()):
+            errors.append(f"部署依赖缺少直接研究依赖：{package}")
     errors.extend(_check_original_hashes(root))
     return errors
 

@@ -78,6 +78,36 @@ class DeepSeekTextProvider:
 
         return OpenAI(api_key=self._api_key, base_url=self.base_url).chat.completions
 
+    def strict_request(self, system_prompt: str, user_prompt: str, parameters: dict) -> dict:
+        """Research wire payload; deliberately separate from legacy fallback generation."""
+        return dict(model=self.model, messages=[
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt}],
+            temperature=parameters['temperature'], max_tokens=parameters['max_tokens'],
+            stream=False, thinking={'type': 'disabled'})
+
+    def generate_strict(self, payload: dict) -> dict:
+        """One request, no SDK retry, fallback or old response reuse. Caller journals errors."""
+        if not self._api_key:
+            raise ValueError('未配置安全文字服务密钥')
+        if self.base_url not in ('https://api.deepseek.com', 'https://api.deepseek.com/v1'):
+            raise ValueError('研究请求只允许已审核的官方 DeepSeek HTTPS 地址')
+        if self._completion_client is not None:
+            response = self._completion_client.create(**payload, timeout=self.timeout_seconds)
+            return response if isinstance(response, dict) else response.model_dump()
+        import json
+        import urllib.request
+        request = urllib.request.Request(self.base_url + '/chat/completions',
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers={'Authorization': 'Bearer ' + self._api_key, 'Content-Type': 'application/json'},
+            method='POST')
+        # urllib does not retry. Reject redirects so credentials cannot follow another host.
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                raise ValueError('文字服务重定向被拒绝')
+        with urllib.request.build_opener(NoRedirect).open(request, timeout=self.timeout_seconds) as response:
+            return json.load(response)
+
     @staticmethod
     def _extract_text(response: object) -> str:
         if isinstance(response, dict):

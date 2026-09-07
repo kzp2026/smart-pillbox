@@ -217,7 +217,9 @@ class AIGenerationOutputTests(unittest.TestCase):
             self.assertTrue(optimization_prompt_path.exists())
             self.assertTrue(optimized_parameters_path.exists())
             evaluation_df = pd.read_excel(evaluation_path)
-            self.assertEqual(list(evaluation_df.columns), ["评价指标", "分值", "评价说明", "优化建议"])
+            self.assertEqual(list(evaluation_df.columns[:4]), ["评价指标", "分值", "评价说明", "优化建议"])
+            self.assertIn("来源", evaluation_df.columns)
+            self.assertEqual(set(evaluation_df["来源"]), {"自动规则自检（非专家评分）"})
             self.assertEqual(
                 evaluation_df["评价指标"].tolist(),
                 [
@@ -232,7 +234,9 @@ class AIGenerationOutputTests(unittest.TestCase):
                     "可优化性",
                 ],
             )
-            self.assertIn("生成—评价—优化", optimization_prompt_path.read_text(encoding="utf-8"))
+            optimization_prompt = optimization_prompt_path.read_text(encoding="utf-8")
+            self.assertIn("生成—材料完整性自检—待验证优化", optimization_prompt)
+            self.assertIn("自动规则自检（非专家评分）", optimization_prompt)
             optimized_payload = json.loads(optimized_parameters_path.read_text(encoding="utf-8"))
             self.assertEqual(optimized_payload["product_type"], "马桶扶手")
             self.assertTrue(optimized_payload["optimization_focus"])

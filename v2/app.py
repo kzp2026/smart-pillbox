@@ -82,7 +82,7 @@ STAGE_NAV_ITEMS = (
     "工业设计 Prompt",
     "AI 效果图",
 )
-NAV_ITEMS = STAGE_NAV_ITEMS + ("历史记录", "设置与迁移")
+NAV_ITEMS = STAGE_NAV_ITEMS + ("论文实验中心", "历史记录", "设置与迁移")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEMAND_DRAFT_KEY = "v2_demand_draft"
 DEMAND_WIDGET_PREFIX = "_v2_demand_"
@@ -194,7 +194,8 @@ def _cached_runs(
         product,
         cache_limit,
     )
-    return list(cached)[:requested_limit]
+    # Research artifacts have their own product-scoped history and are not design/image runs.
+    return [run for run in cached if getattr(run, "provider", "") != "research"][:requested_limit]
 
 
 def _cached_run_detail(
@@ -338,6 +339,8 @@ def _render_login(st_module: object, config: AppConfig) -> None:
                 else:
                     st_module.error("用户名或密码不正确。")
             st_module.caption("登录成功前不会连接业务数据库，也不会加载任何私有产品数据。")
+            from experiment import METHOD_VERSION
+            st_module.caption(f"研究方法：{METHOD_VERSION}")
 
 
 def _logout(st_module: object) -> None:
@@ -870,7 +873,8 @@ def _render_import(
     last_product = st_module.session_state.get("v2_last_product_name")
     if run_id and input_path and Path(str(input_path)).exists():
         st_module.divider()
-        st_module.markdown("#### 原站完整分析流水线")
+        st_module.markdown("#### 研究分析流水线（兼容原有十阶段）")
+        st_module.info("论文对照、真实人工评价及可复现报告请使用侧栏‘论文实验中心’；此处的方案分值是自动规则自检，不是专家评分。")
         st_module.caption("保留原有清洗、关键词、情感、聚类、映射、图谱、参数、方案、效果图和评价 10 个阶段。")
         environment = {
             "DEEPSEEK_API_KEY": config.deepseek_api_key,
@@ -1405,7 +1409,7 @@ def _render_design(st_module: object, history: HistoryService) -> None:
     _render_generation_job_status(st_module, history.repository, detail.run)
     if detail.quality_status:
         score = f"{detail.quality_score:.1f}" if detail.quality_score else "—"
-        st_module.caption(f"质量状态：{detail.quality_status} · 评分：{score}")
+        st_module.caption(f"自动材料检查状态：{detail.quality_status} · 历史兼容值：{score}（非专家评分）")
     _render_visual_delivery_gate(st_module, detail.result)
     design_text = str(detail.result.get("design_text") or "")
     if design_text:
@@ -1698,7 +1702,7 @@ def _render_history(
         first.metric("状态", detail.run.status.value)
         second.metric("图片计划", detail.run.image_count)
         third.metric("归档文件", len(detail.artifacts))
-        fourth.metric("质量分", f"{detail.quality_score:.1f}" if detail.quality_score else "—")
+        fourth.metric("历史自动自检值（非质量分）", f"{detail.quality_score:.1f}" if detail.quality_score else "—")
         with st_module.expander("结果决策", expanded=True):
             decision_labels = {
                 "undecided": "未决定",
@@ -1763,7 +1767,7 @@ def _render_history(
                     with column:
                         st_module.markdown(f"**{compared.run.updated_at[:19].replace('T', ' ')}**")
                         st_module.caption(
-                            f"{compared.run.status.value} · {compared.run.model} · 质量分 {compared.quality_score:.1f}"
+                            f"{compared.run.status.value} · {compared.run.model} · 历史自动自检值 {compared.quality_score:.1f}（非专家评价）"
                         )
                         st_module.write(compared.run.demand_text)
                         design_excerpt = str(compared.result.get("design_text") or "暂无设计文本")
@@ -2024,6 +2028,9 @@ def main() -> None:
         _render_prompt(st, history)
     elif navigation == "AI 效果图":
         _render_images(st, config, repository, store, history)
+    elif navigation == "论文实验中心":
+        from v2.ui.research import render_research
+        render_research(st, repository, store, _active_product(st))
     elif navigation == "历史记录":
         _render_history(st, repository, store, history)
     else:
