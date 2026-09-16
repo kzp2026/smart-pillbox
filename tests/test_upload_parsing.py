@@ -5,7 +5,7 @@ import unittest
 
 import pandas as pd
 
-from scripts.upload_parsing import extract_comments, read_upload_table
+from scripts.upload_parsing import extract_comments, read_upload_table, read_uploaded_tables
 
 
 class UploadParsingTests(unittest.TestCase):
@@ -37,6 +37,17 @@ class UploadParsingTests(unittest.TestCase):
         frame = read_upload_table("comments.xlsx", buffer.getvalue())
 
         self.assertEqual(extract_comments(frame, "评论"), ["字体要大"])
+
+    def test_merges_multiple_uploaded_files_in_selection_order(self) -> None:
+        uploaded_files = [
+            ("first.csv", "评论,评分\n提醒声音要明显,5\n".encode("utf-8")),
+            ("second.csv", "评论,评分\n药仓分格清楚,4\n".encode("utf-8")),
+        ]
+
+        frame = read_uploaded_tables(uploaded_files)
+
+        self.assertEqual(frame["评论"].tolist(), ["提醒声音要明显", "药仓分格清楚"])
+        self.assertEqual(frame["评分"].tolist(), [5, 4])
 
 
 if __name__ == "__main__":

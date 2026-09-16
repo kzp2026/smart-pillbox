@@ -22,7 +22,7 @@ from scripts.product_knowledge_base import (
     generate_design_package,
     normalize_database_url,
 )
-from scripts.upload_parsing import candidate_comment_columns, default_comment_column, extract_comments, read_upload_table
+from scripts.upload_parsing import candidate_comment_columns, default_comment_column, extract_comments, read_upload_table, read_uploaded_tables
 from scripts.visual_asset_quality import evaluate_visual_asset
 
 
@@ -140,6 +140,10 @@ def parse_uploaded_table(filename: str, file_bytes: bytes) -> pd.DataFrame:
 
 def load_uploaded_table(uploaded_file) -> pd.DataFrame:
     return parse_uploaded_table(uploaded_file.name, uploaded_file.getvalue())
+
+
+def load_uploaded_tables(uploaded_files) -> pd.DataFrame:
+    return read_uploaded_tables((uploaded_file.name, uploaded_file.getvalue()) for uploaded_file in uploaded_files)
 
 
 def derive_requirements_from_comments(product_id: int, batch_id: int, comments: list[str], kb: ProductKnowledgeBase) -> int:
@@ -1448,11 +1452,15 @@ with tab_import:
     with col_left:
         product_name = st.text_input("产品名称", placeholder="例如：智能药盒、保温杯、蓝牙耳机")
         category = st.text_input("产品品类", placeholder="例如：适老健康、厨房电器、可穿戴设备")
-        uploaded = st.file_uploader("上传评论数据", type=["xlsx", "xls", "csv"])
-        if uploaded is not None:
+        uploaded_files = st.file_uploader(
+            "上传评论数据（可多选）",
+            type=["xlsx", "xls", "csv"],
+            accept_multiple_files=True,
+        )
+        if uploaded_files:
             try:
                 with st.spinner("正在读取并解析上传文件..."):
-                    uploaded_df = load_uploaded_table(uploaded)
+                    uploaded_df = load_uploaded_tables(uploaded_files)
                 column_options = candidate_comment_columns(uploaded_df)
                 suggested_col = default_comment_column(uploaded_df)
                 selected_comment_col = st.selectbox(
@@ -1467,15 +1475,15 @@ with tab_import:
             "存入知识库",
             type="primary",
             use_container_width=True,
-            disabled=uploaded is None or not product_name.strip() or not selected_comment_col,
+            disabled=not uploaded_files or not product_name.strip() or not selected_comment_col,
         )
     with col_right:
         st.info("导入后会保存原始评论，并自动抽取一批基础需求标签。后续生成新产品时，会从这些历史评论和需求证据中检索相关内容。")
-        if uploaded is not None and not uploaded_df.empty and selected_comment_col:
-            st.caption(f"当前评论列：{selected_comment_col}，有效评论 {len(preview_comments)} 条")
+        if uploaded_files and not uploaded_df.empty and selected_comment_col:
+            st.caption(f"已选择 {len(uploaded_files)} 个文件；当前评论列：{selected_comment_col}，有效评论 {len(preview_comments)} 条")
             st.dataframe(pd.DataFrame({"评论预览": preview_comments[:20]}), use_container_width=True, hide_index=True)
-        elif uploaded is None:
-            st.caption("上传 CSV 或 Excel 后，可以在左侧选择评论列并预览前 20 条。")
+        elif not uploaded_files:
+            st.caption("可一次选择多个 CSV 或 Excel 文件；合并后可在左侧选择评论列并预览前 20 条。")
 
     if import_clicked:
         if not preview_comments:
@@ -1486,7 +1494,8 @@ with tab_import:
                 st.write("1/4 正在校验评论列和有效评论...")
                 progress.progress(15)
                 with st.spinner("正在写入云数据库..."):
-                    report = kb.ingest_comment_batch_with_report(product_name, category, uploaded.name, preview_comments)
+                    source_filenames = "、".join(uploaded_file.name for uploaded_file in uploaded_files)
+                    report = kb.ingest_comment_batch_with_report(product_name, category, source_filenames, preview_comments)
                 progress.progress(65)
                 with st.spinner("正在抽取基础需求证据..."):
                     requirement_count = derive_requirements_from_comments(int(report["product_id"]), int(report["batch_id"]), preview_comments, kb)

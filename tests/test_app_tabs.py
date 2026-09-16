@@ -34,6 +34,11 @@ class AppTabsTests(unittest.TestCase):
         ]:
             self.assertIn(label, app_source)
 
+    def test_main_app_accepts_multiple_comment_data_files(self) -> None:
+        app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn("accept_multiple_files=True", app_source)
+
     def test_main_app_keeps_runtime_feedback_and_dashscope_key_session_state(self) -> None:
         app_source = (ROOT_DIR / "app.py").read_text(encoding="utf-8")
         for snippet in [

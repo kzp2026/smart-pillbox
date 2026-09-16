@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from io import BytesIO
 from pathlib import Path
 
@@ -26,6 +27,14 @@ def read_upload_table(filename: str, file_bytes: bytes) -> pd.DataFrame:
         buffer.seek(0)
         return pd.read_csv(buffer)
     raise ValueError(f"不支持的文件格式：{suffix}")
+
+
+def read_uploaded_tables(uploaded_files: Iterable[tuple[str, bytes]]) -> pd.DataFrame:
+    """Read selected CSV/Excel files and combine their rows in selection order."""
+    frames = [read_upload_table(filename, file_bytes) for filename, file_bytes in uploaded_files]
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True, sort=False)
 
 
 def candidate_comment_columns(df: pd.DataFrame) -> list[str]:
