@@ -216,6 +216,11 @@ class AppStructureTests(unittest.TestCase):
         self.assertIn("combined_comments.csv", import_source)
         self.assertIn("已选择 {len(uploaded_files)} 个文件", import_source)
 
+    def test_import_parse_failure_records_only_its_safe_exception_type(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn("评论文件解析失败，异常类型=%s", source)
+
     def test_app_bootstrap_avoids_new_domain_type_imports_during_hot_reload(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
         tree = ast.parse(source)

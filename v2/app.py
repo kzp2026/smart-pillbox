@@ -803,8 +803,14 @@ def _render_import(
         dataframe = read_uploaded_tables(upload_payloads)
         candidates = candidate_comment_columns(dataframe)
     except Exception as exc:
+        error_kind = type(exc).__name__
+        _LOGGER.warning("评论文件解析失败，异常类型=%s", error_kind)
         st_module.error(
-            public_error_message("文件解析失败", exc, guidance="请确认文件格式正确后重试。")
+            public_error_message(
+                "文件解析失败",
+                exc,
+                guidance=f"读取异常：{error_kind}。请重新选择文件后重试。",
+            )
         )
         return
     st_module.caption(f"已选择 {len(uploaded_files)} 个文件，按选择顺序合并后预览。")
