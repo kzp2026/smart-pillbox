@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -26,6 +27,15 @@ class UploadParsingTests(unittest.TestCase):
         csv_bytes = "评论,评分\n提醒声音要明显,5\n药仓分格清楚,4\n".encode("gbk")
 
         frame = read_upload_table("comments.csv", csv_bytes)
+
+        self.assertEqual(list(frame.columns), ["评论", "评分"])
+        self.assertEqual(extract_comments(frame, "评论"), ["提醒声音要明显", "药仓分格清楚"])
+
+    def test_reads_csv_with_standard_library_fallback_after_pandas_parser_error(self) -> None:
+        csv_bytes = "评论,评分\n提醒声音要明显,5\n药仓分格清楚,4\n".encode("utf-8-sig")
+
+        with patch("scripts.upload_parsing.pd.read_csv", side_effect=pd.errors.ParserError("fixture")):
+            frame = read_upload_table("comments.csv", csv_bytes)
 
         self.assertEqual(list(frame.columns), ["评论", "评分"])
         self.assertEqual(extract_comments(frame, "评论"), ["提醒声音要明显", "药仓分格清楚"])
