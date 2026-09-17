@@ -1,12 +1,38 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import csv
 from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
 
 from scripts.common import detect_comment_column
+
+
+def _read_csv_with_stdlib(file_bytes: bytes) -> pd.DataFrame:
+    """Read a valid CSV when pandas rejects its dialect or field layout."""
+    last_error: UnicodeDecodeError | None = None
+    for encoding in ["utf-8-sig", "utf-8", "gb18030", "gbk"]:
+        try:
+            text = file_bytes.decode(encoding)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+        sample = text[:8192]
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",\t;|")
+        except csv.Error:
+            dialect = csv.excel
+        rows = list(csv.reader(text.splitlines(), dialect=dialect))
+        if not rows:
+            return pd.DataFrame()
+        width = len(rows[0])
+        normalized_rows = [row[:width] + [""] * max(0, width - len(row)) for row in rows[1:]]
+        return pd.DataFrame(normalized_rows, columns=rows[0])
+    if last_error:
+        raise last_error
+    raise UnicodeDecodeError("csv", b"", 0, 0, "无法识别 CSV 编码")
 
 
 def read_upload_table(filename: str, file_bytes: bytes) -> pd.DataFrame:
@@ -16,16 +42,26 @@ def read_upload_table(filename: str, file_bytes: bytes) -> pd.DataFrame:
         return pd.read_excel(buffer)
     if suffix == ".csv":
         last_error: UnicodeDecodeError | None = None
+        parser_error: pd.errors.ParserError | None = None
         for encoding in ["utf-8-sig", "utf-8", "gb18030", "gbk"]:
             try:
                 buffer.seek(0)
                 return pd.read_csv(buffer, encoding=encoding)
             except UnicodeDecodeError as exc:
                 last_error = exc
+            except pd.errors.ParserError as exc:
+                parser_error = exc
+                break
+        try:
+            return _read_csv_with_stdlib(file_bytes)
+        except UnicodeDecodeError:
+            if parser_error:
+                raise parser_error
         if last_error:
             raise last_error
-        buffer.seek(0)
-        return pd.read_csv(buffer)
+        if parser_error:
+            raise parser_error
+        return _read_csv_with_stdlib(file_bytes)
     raise ValueError(f"不支持的文件格式：{suffix}")
 
 
