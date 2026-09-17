@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_SHA1 = {
-    "app.py": "af75821eaea41827af64d7c63fd152948aa2bc4c",
+    "app.py": "b9987a6b9200fd472423836b94729317ad4d9982",
     "app_legacy_current.py": "60ca9b89938f8ceb2dbb360b600604c77a006eca",
     "pages/01_现有流程备份.py": "899ca064214251430ecea75e7f1bc3617a2e42cd",
     "pages/02_产品管理.py": "92836021ce996dffaf14787de7b4c9bcff4bb951",

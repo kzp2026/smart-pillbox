@@ -772,7 +772,7 @@ def _render_import(
     store: object,
 ) -> None:
     st_module.markdown("### 导入评论资产")
-    st_module.caption("支持 CSV、XLSX、XLS；单文件最大 50 MB。导入会去重，并自动沉淀需求证据。")
+    st_module.caption("支持一次选择多个 CSV、XLSX、XLS；每个文件最大 50 MB。导入会去重，并自动沉淀需求证据。")
     if "v2_import_product_name" not in st_module.session_state:
         st_module.session_state["v2_import_product_name"] = _active_product(st_module)
     product_name = st_module.text_input(
@@ -781,24 +781,33 @@ def _render_import(
         key="v2_import_product_name",
     )
     category = st_module.text_input("产品分类", placeholder="例如：适老健康")
-    uploaded = st_module.file_uploader("上传评论文件", type=["csv", "xlsx", "xls"])
-    if not uploaded:
+    uploaded_files = st_module.file_uploader(
+        "上传评论文件（可多选）",
+        type=["csv", "xlsx", "xls"],
+        accept_multiple_files=True,
+    )
+    if not uploaded_files:
         st_module.info("上传后会先显示表格预览和可选评论列，不会自动写入数据库。")
         return
-    data = uploaded.getvalue()
-    if len(data) > MAX_UPLOAD_BYTES:
-        st_module.error("文件超过 50 MB，未进行解析或写入。")
+    upload_payloads = [(uploaded_file.name, uploaded_file.getvalue()) for uploaded_file in uploaded_files]
+    oversized_filename = next(
+        (filename for filename, data in upload_payloads if len(data) > MAX_UPLOAD_BYTES),
+        None,
+    )
+    if oversized_filename:
+        st_module.error(f"文件“{oversized_filename}”超过 50 MB，未进行解析或写入。")
         return
     try:
-        from scripts.upload_parsing import candidate_comment_columns, default_comment_column, read_upload_table
+        from scripts.upload_parsing import candidate_comment_columns, default_comment_column, read_uploaded_tables
 
-        dataframe = read_upload_table(uploaded.name, data)
+        dataframe = read_uploaded_tables(upload_payloads)
         candidates = candidate_comment_columns(dataframe)
     except Exception as exc:
         st_module.error(
             public_error_message("文件解析失败", exc, guidance="请确认文件格式正确后重试。")
         )
         return
+    st_module.caption(f"已选择 {len(uploaded_files)} 个文件，按选择顺序合并后预览。")
     st_module.dataframe(dataframe.head(50), hide_index=True, use_container_width=True)
     if not candidates:
         st_module.error("没有检测到可用的文本列。请确认文件包含评论内容。")
@@ -852,11 +861,17 @@ def _render_import(
             st_module.error("请先填写产品名称。")
         else:
             result = ImportService(repository).import_comments(
-                product_name, category, uploaded.name, comments, metadata=comment_metadata
+                product_name,
+                category,
+                "、".join(uploaded_file.name for uploaded_file in uploaded_files),
+                comments,
+                metadata=comment_metadata,
             )
             _invalidate_view_cache(repository)
+            combined_filename = "combined_comments.csv"
+            combined_data = dataframe.to_csv(index=False).encode("utf-8-sig")
             run_id, input_path = _create_import_run(
-                repository, store, product_name, uploaded.name, data
+                repository, store, product_name, combined_filename, combined_data
             )
             st_module.session_state["v2_current_run_id"] = run_id
             st_module.session_state["v2_last_input_path"] = input_path

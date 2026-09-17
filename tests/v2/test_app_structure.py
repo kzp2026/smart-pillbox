@@ -205,6 +205,17 @@ class AppStructureTests(unittest.TestCase):
             self.assertIn(label, source)
         self.assertIn("管理员工具 · 原站数据复制", source)
 
+    def test_import_accepts_multiple_files_and_uses_one_combined_pipeline_input(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+        start = source.index("def _render_import(")
+        end = source.index("\ndef _constraint_inputs(", start)
+        import_source = source[start:end]
+
+        self.assertIn("accept_multiple_files=True", import_source)
+        self.assertIn("read_uploaded_tables", import_source)
+        self.assertIn("combined_comments.csv", import_source)
+        self.assertIn("已选择 {len(uploaded_files)} 个文件", import_source)
+
     def test_app_bootstrap_avoids_new_domain_type_imports_during_hot_reload(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
