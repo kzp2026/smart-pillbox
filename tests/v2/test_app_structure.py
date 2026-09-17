@@ -247,6 +247,13 @@ class AppStructureTests(unittest.TestCase):
         self.assertIn("combined_comments.csv", import_source)
         self.assertIn("已选择 {len(uploaded_files)} 个文件", import_source)
 
+    def test_import_button_shows_progress_during_database_write(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+        start = source.index("def _render_import(")
+        end = source.index("\ndef _constraint_inputs(", start)
+
+        self.assertIn('st_module.spinner("正在批量导入评论并生成候选需求……")', source[start:end])
+
     def test_import_parse_failure_records_only_its_safe_exception_type(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
 

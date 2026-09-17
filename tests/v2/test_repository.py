@@ -5,6 +5,7 @@ import unittest
 import inspect
 from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
 from v2.adapters.postgres import KnowledgeRepository
 from v2.adapters.storage import LocalArtifactStore
@@ -13,6 +14,15 @@ from v2.domain.models import CreateRunCommand, RunStatus
 
 
 class KnowledgeRepositoryTests(unittest.TestCase):
+    def test_large_comment_import_uses_one_batch_insert(self) -> None:
+        comments = [f"评论-{index}" for index in range(2208)]
+
+        with mock.patch.object(self.repo, "_executemany", wraps=self.repo._executemany) as batch_insert:
+            report = self.repo.ingest_comments("智能药盒", "适老健康", "comments.csv", comments)
+
+        batch_insert.assert_called_once()
+        self.assertEqual(report.inserted_count, 2208)
+
     def test_provider_filter_precedes_limit(self):
         self.repo.create_pipeline_run(CreateRunCommand('A','设计','offline','rules',0),'design-old')
         for i in range(5):

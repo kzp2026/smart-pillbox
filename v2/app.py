@@ -887,19 +887,20 @@ def _render_import(
         if not product_name.strip():
             st_module.error("请先填写产品名称。")
         else:
-            result = ImportService(repository).import_comments(
-                product_name,
-                category,
-                "、".join(uploaded_file.name for uploaded_file in uploaded_files),
-                comments,
-                metadata=comment_metadata,
-            )
-            _invalidate_view_cache(repository)
-            combined_filename = "combined_comments.csv"
-            combined_data = dataframe.to_csv(index=False).encode("utf-8-sig")
-            run_id, input_path = _create_import_run(
-                repository, store, product_name, combined_filename, combined_data
-            )
+            with st_module.spinner("正在批量导入评论并生成候选需求……"):
+                result = ImportService(repository).import_comments(
+                    product_name,
+                    category,
+                    "、".join(uploaded_file.name for uploaded_file in uploaded_files),
+                    comments,
+                    metadata=comment_metadata,
+                )
+                _invalidate_view_cache(repository)
+                combined_filename = "combined_comments.csv"
+                combined_data = dataframe.to_csv(index=False).encode("utf-8-sig")
+                run_id, input_path = _create_import_run(
+                    repository, store, product_name, combined_filename, combined_data
+                )
             st_module.session_state["v2_current_run_id"] = run_id
             st_module.session_state["v2_last_input_path"] = input_path
             st_module.session_state["v2_last_product_name"] = product_name

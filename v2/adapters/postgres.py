@@ -144,21 +144,25 @@ class KnowledgeRepository:
                 (self.owner_id, product_id, clean_text(source_filename), len(valid), now),
             )
             batch_id = self._last_id(connection, cursor)
-            inserted_count = 0
+            before_row = connection.execute(
+                self._sql("SELECT COUNT(*) AS count FROM comments WHERE owner_id = ? AND product_id = ?"),
+                (self.owner_id, product_id),
+            ).fetchone()
+            before_count = int(before_row["count"] or 0)
+            statement = (
+                "INSERT INTO comments "
+                "(owner_id, product_id, batch_id, comment_original, clean_comment, fingerprint, created_at, "
+                "rating, commented_at, product_variant, source_channel, user_segment) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            if self.is_sqlite:
+                statement = statement.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
+            else:
+                statement += " ON CONFLICT DO NOTHING"
+            comment_rows = []
             for comment, comment_metadata in valid:
                 comment_fingerprint = fingerprint(comment)
-                statement = (
-                    "INSERT INTO comments "
-                    "(owner_id, product_id, batch_id, comment_original, clean_comment, fingerprint, created_at, "
-                    "rating, commented_at, product_variant, source_channel, user_segment) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                )
-                if self.is_sqlite:
-                    statement = statement.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
-                else:
-                    statement += " ON CONFLICT DO NOTHING"
-                inserted = connection.execute(
-                    self._sql(statement),
+                comment_rows.append(
                     (
                         self.owner_id,
                         product_id,
@@ -172,9 +176,15 @@ class KnowledgeRepository:
                         clean_text(comment_metadata.get("product_variant")),
                         clean_text(comment_metadata.get("source_channel")),
                         clean_text(comment_metadata.get("user_segment")),
-                    ),
+                    )
                 )
-                inserted_count += max(0, int(inserted.rowcount or 0))
+            if comment_rows:
+                self._executemany(connection, statement, comment_rows)
+            after_row = connection.execute(
+                self._sql("SELECT COUNT(*) AS count FROM comments WHERE owner_id = ? AND product_id = ?"),
+                (self.owner_id, product_id),
+            ).fetchone()
+            inserted_count = max(0, int(after_row["count"] or 0) - before_count)
             connection.execute(
                 self._sql("UPDATE products SET updated_at = ? WHERE id = ? AND owner_id = ?"),
                 (now, product_id, self.owner_id),
@@ -966,6 +976,12 @@ class KnowledgeRepository:
         if self.is_sqlite:
             return int(cursor.lastrowid)
         return int(connection.execute("SELECT LASTVAL() AS id").fetchone()["id"])
+
+    def _executemany(
+        self, connection: object, statement: str, rows: Sequence[Sequence[object]]
+    ) -> None:
+        cursor = connection.cursor()
+        cursor.executemany(self._sql(statement), rows)
 
     def _sql(self, statement: str) -> str:
         return statement if self.is_sqlite else statement.replace("?", "%s")
