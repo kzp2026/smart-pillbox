@@ -8,8 +8,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import pandas as pd
 from streamlit.testing.v1 import AppTest
 
+import v2.app as app_module
 from v2.app import (
     NAV_ITEMS,
     STAGE_NAV_ITEMS,
@@ -30,6 +32,35 @@ from v2.domain.models import WorkspaceSnapshot
 
 
 class AppStructureTests(unittest.TestCase):
+    def test_upload_parser_survives_a_cached_pre_multifile_module(self) -> None:
+        stale_parser = SimpleNamespace(
+            read_upload_table=lambda filename, data: pd.DataFrame({"评论": [filename]}),
+            candidate_comment_columns=lambda frame: ["评论"],
+            default_comment_column=lambda frame: "评论",
+        )
+        parse_uploads = getattr(app_module, "_parse_uploaded_comment_files", None)
+
+        self.assertTrue(callable(parse_uploads))
+        with mock.patch.object(app_module.importlib, "import_module", return_value=stale_parser):
+            dataframe, candidates, default_column = parse_uploads(
+                [("first.csv", b"a"), ("second.csv", b"b")]
+            )
+
+        self.assertEqual(dataframe["评论"].tolist(), ["first.csv", "second.csv"])
+        self.assertEqual(candidates, ["评论"])
+        self.assertEqual(default_column, "评论")
+
+    def test_body_navigation_is_deferred_until_before_widgets_are_created(self) -> None:
+        st_module = SimpleNamespace(session_state={}, rerun=mock.Mock())
+
+        app_module._navigate_to(st_module, "导入评论资产")
+
+        self.assertNotIn("v2_navigation", st_module.session_state)
+        self.assertEqual(st_module.session_state["v2_pending_navigation"], "导入评论资产")
+        app_module._apply_pending_navigation(st_module)
+        self.assertEqual(st_module.session_state["v2_navigation"], "导入评论资产")
+        self.assertEqual(st_module.session_state["v2_mobile_navigation"], "导入评论资产")
+
     def test_graph_rebuilds_stale_generic_snapshot(self) -> None:
         detail = SimpleNamespace(
             run=SimpleNamespace(demand_text="优化提醒、收纳与外观体验。"),
@@ -212,7 +243,7 @@ class AppStructureTests(unittest.TestCase):
         import_source = source[start:end]
 
         self.assertIn("accept_multiple_files=True", import_source)
-        self.assertIn("read_uploaded_tables", import_source)
+        self.assertIn("_parse_uploaded_comment_files", import_source)
         self.assertIn("combined_comments.csv", import_source)
         self.assertIn("已选择 {len(uploaded_files)} 个文件", import_source)
 

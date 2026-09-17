@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import io
 import logging
 import json
@@ -361,6 +362,13 @@ def _sync_navigation(st_module: object, source_key: str, target_key: str) -> Non
         st_module.session_state.pop("v2_loaded_image_run_id", None)
 
 
+def _apply_pending_navigation(st_module: object) -> None:
+    target = st_module.session_state.pop("v2_pending_navigation", None)
+    if target in NAV_ITEMS:
+        st_module.session_state["v2_navigation"] = target
+        st_module.session_state["v2_mobile_navigation"] = target
+
+
 def _open_key_settings(st_module: object) -> None:
     target = "设置与迁移"
     st_module.session_state["v2_navigation"] = target
@@ -507,9 +515,26 @@ def _set_active_product(st_module: object, product_name: str) -> str:
 
 
 def _navigate_to(st_module: object, target: str) -> None:
-    st_module.session_state["v2_navigation"] = target
-    st_module.session_state["v2_mobile_navigation"] = target
+    st_module.session_state["v2_pending_navigation"] = target
     st_module.rerun()
+
+
+def _parse_uploaded_comment_files(
+    upload_payloads: list[tuple[str, bytes]],
+) -> tuple[object, list[str], str]:
+    """Parse uploads while tolerating a module cached before multi-file support."""
+    parser = importlib.import_module("scripts.upload_parsing")
+    read_many = getattr(parser, "read_uploaded_tables", None)
+    if callable(read_many):
+        dataframe = read_many(upload_payloads)
+    else:
+        import pandas as pd
+
+        frames = [parser.read_upload_table(filename, data) for filename, data in upload_payloads]
+        dataframe = pd.concat(frames, ignore_index=True, sort=False)
+    candidates = parser.candidate_comment_columns(dataframe)
+    default_column = str(parser.default_comment_column(dataframe))
+    return dataframe, candidates, default_column
 
 
 def _demand_draft(st_module: object) -> dict[str, object]:
@@ -798,10 +823,7 @@ def _render_import(
         st_module.error(f"文件“{oversized_filename}”超过 50 MB，未进行解析或写入。")
         return
     try:
-        from scripts.upload_parsing import candidate_comment_columns, default_comment_column, read_uploaded_tables
-
-        dataframe = read_uploaded_tables(upload_payloads)
-        candidates = candidate_comment_columns(dataframe)
+        dataframe, candidates, default_column = _parse_uploaded_comment_files(upload_payloads)
     except Exception as exc:
         error_kind = type(exc).__name__
         _LOGGER.warning("评论文件解析失败，异常类型=%s", error_kind)
@@ -818,7 +840,6 @@ def _render_import(
     if not candidates:
         st_module.error("没有检测到可用的文本列。请确认文件包含评论内容。")
         return
-    default_column = default_comment_column(dataframe)
     comment_column = st_module.selectbox(
         "评论内容列", candidates, index=candidates.index(default_column) if default_column in candidates else 0
     )
@@ -1992,6 +2013,7 @@ def main() -> None:
 
     st.session_state["login_username"] = ""
     st.session_state["login_password"] = ""
+    _apply_pending_navigation(st)
 
     try:
         repository = _repository_for(config)
