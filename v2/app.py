@@ -82,7 +82,7 @@ STAGE_NAV_ITEMS = (
     "工业设计 Prompt",
     "AI 效果图",
 )
-NAV_ITEMS = STAGE_NAV_ITEMS + ("论文实验中心", "历史记录", "设置与迁移")
+NAV_ITEMS = STAGE_NAV_ITEMS + ("研究评论库", "论文实验中心", "历史记录", "设置与迁移")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEMAND_DRAFT_KEY = "v2_demand_draft"
 DEMAND_WIDGET_PREFIX = "_v2_demand_"
@@ -803,8 +803,14 @@ def _render_import(
         dataframe = read_uploaded_tables(upload_payloads)
         candidates = candidate_comment_columns(dataframe)
     except Exception as exc:
+        error_kind = type(exc).__name__
+        _LOGGER.warning("评论文件解析失败，异常类型=%s", error_kind)
         st_module.error(
-            public_error_message("文件解析失败", exc, guidance="请确认文件格式正确后重试。")
+            public_error_message(
+                "文件解析失败",
+                exc,
+                guidance=f"读取异常：{error_kind}。请重新选择文件后重试。",
+            )
         )
         return
     st_module.caption(f"已选择 {len(uploaded_files)} 个文件，按选择顺序合并后预览。")
@@ -2043,6 +2049,9 @@ def main() -> None:
         _render_prompt(st, history)
     elif navigation == "AI 效果图":
         _render_images(st, config, repository, store, history)
+    elif navigation == "研究评论库":
+        from v2.ui.research_comments import render_research_comments
+        render_research_comments(st, repository, _active_product(st))
     elif navigation == "论文实验中心":
         from v2.ui.research import render_research
         render_research(st, repository, store, _active_product(st))
