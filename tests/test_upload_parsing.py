@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 from io import BytesIO
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +12,15 @@ from scripts.upload_parsing import extract_comments, read_upload_table, read_upl
 
 
 class UploadParsingTests(unittest.TestCase):
+    def test_scripts_is_a_local_regular_package(self) -> None:
+        spec = importlib.util.find_spec("scripts")
+
+        self.assertIsNotNone(spec)
+        self.assertEqual(
+            Path(spec.origin).resolve(),
+            (Path(__file__).resolve().parents[1] / "scripts" / "__init__.py").resolve(),
+        )
+
     def test_can_extract_comments_from_selected_column(self) -> None:
         frame = pd.DataFrame(
             {
