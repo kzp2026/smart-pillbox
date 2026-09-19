@@ -124,6 +124,16 @@ class AppStructureTests(unittest.TestCase):
         self.assertIn('data_mime_prefixes=("image/",)', render_images_source)
         self.assertIn('session_state.pop("v2_loaded_image_run_id", None)', source)
 
+    def test_ai_image_page_can_switch_to_a_persisted_image_run(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
+        start = source.index("def _render_images(")
+        end = source.index("\ndef _zip_run(", start)
+        render_images_source = source[start:end]
+
+        self.assertIn("repository.list_run_ids_with_images(active)", render_images_source)
+        self.assertIn("选择已归档效果图运行", render_images_source)
+        self.assertIn("该运行尚未归档图片", render_images_source)
+
     def test_graph_and_design_pages_do_not_preload_archived_artifact_bytes(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "v2" / "app.py").read_text(encoding="utf-8")
         graph_start = source.index("def _render_graph(")

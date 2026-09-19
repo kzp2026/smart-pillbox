@@ -1523,12 +1523,33 @@ def _render_images(
     if not runs:
         st_module.info(f"当前产品“{active}”暂无效果图运行记录，其他产品的历史结果已隐藏。")
         return
+    image_run_ids = _cached_view(
+        repository,
+        "image-run-ids",
+        lambda: repository.list_run_ids_with_images(active),
+        active,
+    )
     known_ids = {run.id for run in runs}
     selected = str(st_module.session_state.get("v2_current_run_id") or "")
-    if selected not in known_ids:
-        selected = runs[0].id
-        st_module.session_state["v2_current_run_id"] = selected
-    run = next(item for item in runs if item.id == selected)
+    archived_runs = [item for item in runs if item.id in image_run_ids]
+    if selected not in known_ids or (selected not in image_run_ids and archived_runs):
+        selected = archived_runs[0].id if archived_runs else runs[0].id
+    run_options = archived_runs + [item for item in runs if item.id not in image_run_ids]
+    selected = st_module.selectbox(
+        "选择已归档效果图运行",
+        [item.id for item in run_options],
+        index=[item.id for item in run_options].index(selected),
+        format_func=lambda run_id: next(
+            f"{item.updated_at[:19].replace('T', ' ')} · {item.status.value} · "
+            f"{'已归档图片' if item.id in image_run_ids else '该运行尚未归档图片'}"
+            for item in run_options
+            if item.id == run_id
+        ),
+    )
+    if selected != st_module.session_state.get("v2_current_run_id"):
+        st_module.session_state.pop("v2_loaded_image_run_id", None)
+    st_module.session_state["v2_current_run_id"] = selected
+    run = next(item for item in run_options if item.id == selected)
     st_module.caption(
         f"当前产品：{run.target_product} · 最近运行：{run.status.value} · "
         f"计划图片 {run.image_count} 张。页面切换不自动读取大图。"
