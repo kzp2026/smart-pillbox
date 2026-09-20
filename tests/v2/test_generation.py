@@ -10,7 +10,11 @@ from v2.providers.text import TextResult
 
 
 class LiveTextProvider:
+    def __init__(self) -> None:
+        self.request = None
+
     def generate(self, request):
+        self.request = request
         return TextResult("DeepSeek 增强后的完整设计方案", "live", "deepseek", "deepseek-chat")
 
 
@@ -91,6 +95,32 @@ class GenerationServiceTests(unittest.TestCase):
             item["prompt"] for item in visual_assets if item["key"] == "exploded"
         ).lower())
         self.assertIsNotNone(self.repo.get_generation_run(run.id))
+
+    def test_design_generation_uses_a_bounded_traceable_text_input(self) -> None:
+        imported = self.repo.ingest_comments(
+            "智能药盒", "适老健康", "comments.csv", ["提醒" + "很长的历史评论" * 4000]
+        )
+        self.repo.add_requirement_once(
+            imported.product_id,
+            imported.batch_id,
+            "提醒反馈",
+            "提醒需求" + "冗长元数据" * 4000,
+            ["提醒"],
+            "提醒声音太小",
+            80,
+        )
+        preview = self.service.preview(self.command, nonce="bounded-input")
+        run = self.service.confirm_and_start(self.command, preview, preview.confirmation_token)
+        provider = LiveTextProvider()
+
+        generated = self.service.generate_design(run.id, self.command, {}, provider)
+
+        self.assertLessEqual(len(provider.request.user_prompt), 12_000)
+        self.assertIn('"评论编号"', provider.request.user_prompt)
+        self.assertIn('"需求编号"', provider.request.user_prompt)
+        self.assertNotIn("冗长元数据" * 100, provider.request.user_prompt)
+        self.assertEqual(generated.context["text_input_budget"]["max_characters"], 12_000)
+        self.assertLessEqual(generated.context["text_input_budget"]["actual_characters"], 12_000)
 
     def test_graph_snapshot_deduplicates_requirements_and_maps_specific_functions(self) -> None:
         graph = GenerationService._build_graph_snapshot(
