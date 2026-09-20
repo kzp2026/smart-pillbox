@@ -132,7 +132,7 @@ V2 当前有 7 个真实阶段导航组：导入评论资产、需求生成、�
 
 用户于2026-09-05选择两种算法显式配置。唯一服务 experiment/pipeline/，CLI experiment/run_experiment.py 和 scripts/run_paper_experiment.py、V2 application/experiment.py 共用。experiment/runs/<run_id>/ 创建独立目录，stages/<stage>/<attempt>不可覆盖，manifest记录全参数、源码/输入/输出/嵌入模型哈希、环境和完整Prompt；不得读output中的最新同名文件。BERTopic本地固定多语言模型和KMeans均无静默回退。
 
-评论清洗510行审计保留500行，昵称仅在私有原始输入中，分析用匿名ID。semantics.py是共享需求命名与映射词典；规则输出pending_review或needs_naming，正式图谱只有approved，生成Prompt保存实际used_graph_paths。普通V2设计页可展示候选语义图谱，但明确无正式图谱证据；历史semantic-v2仅只读兼容。
+评论清洗510行审计保留500行，昵称仅在私有原始输入中，分析用匿名ID。semantics.py是共享需求命名与映射词典；规则输出pending_review或needs_naming，生成Prompt保存实际used_graph_paths。普通V2设计页可展示候选语义图谱，但明确无正式图谱证据；历史semantic-v2仅只读兼容。若研究者明确确认既有的限定关系清单，可将该清单作为“研究者确认关系证据”传入生成，必须保存映射编号、评论编号、审核意见与空白的待填审核人/日期，不得标注为专家验证或扩大到未确认关系。
 
 新增v2/ui/experiment.py嵌入既有论文实验中心，不新增顶层导航、数据库表、Secrets、迁移。新运行使用 provider=research/model=paper-repro-v2.1，旧 paper-repro-v2.0 历史保持只读可打开；两者均通过现有私有表和 Storage 持久化。每次用户新建请求生成 request_id，同一 request_id 重复提交返回原运行，不同 request_id 即使配置相同也创建新运行。失败和停在 graph 的 paused 运行都保存完整 ZIP、状态与可下载历史；失败记录 FAILED，paused 映射为 PARTIAL。归档回评与修改经安全解包/哈希检查创建子运行，继承父审核关系，原运行只读。页面显示方法/算法/证据/审核关系/生成模式/独立评价/闭环。原paper-evidence-v1历史读取不混入新正式结果。
 

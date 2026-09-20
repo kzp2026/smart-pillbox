@@ -122,6 +122,42 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertEqual(generated.context["text_input_budget"]["max_characters"], 12_000)
         self.assertLessEqual(generated.context["text_input_budget"]["actual_characters"], 12_000)
 
+    def test_researcher_confirmed_paths_are_traced_in_the_prompt(self) -> None:
+        imported = self.repo.ingest_comments(
+            "智能药盒", "适老健康", "comments.csv", ["提醒声音太小，老人听不清"]
+        )
+        requirement_id = self.repo.add_requirement_once(
+            imported.product_id, imported.batch_id, "提醒反馈", "提醒要明显", ["提醒"],
+            "提醒声音太小，老人听不清", 80,
+        )
+        preview = self.service.preview(self.command, nonce="researcher-confirmed")
+        run = self.service.confirm_and_start(self.command, preview, preview.confirmation_token)
+        provider = LiveTextProvider()
+        graph = {
+            "version": "rfs-candidate-v2", "review_status": "研究者已确认",
+            "evidence_status": "研究者确认关系证据", "approved_mapping_count": 1,
+            "researcher_confirmed_mapping_count": 1,
+            "used_graph_paths": [{
+                "path_id": "S23-001", "mapping_id": "S23-RFS-001", "requirement_id": requirement_id,
+                "comment_ids": ["C1"], "review_decision": "研究者已确认", "reviewer": "", "reviewed_at": "",
+            }],
+            "requirements": [{"name": "提醒反馈", "detail": "提醒声音太小"}],
+            "functions": [{"name": "多模态提醒", "source": "映射审核表"}],
+            "structures": [{"name": "扬声器与LED", "source": "映射审核表"}],
+            "links": [{
+                "mapping_id": "S23-RFS-001", "requirement": "提醒反馈", "function": "多模态提醒",
+                "structure": "扬声器与LED", "evidence": "C1", "comment_ids": ["C1"],
+                "review_status": "研究者已确认",
+            }],
+        }
+
+        generated = self.service.generate_design(run.id, self.command, {}, provider, graph)
+
+        self.assertEqual(generated.context["used_graph_paths"][0]["mapping_id"], "S23-RFS-001")
+        self.assertIn('"图谱状态":"研究者确认关系证据"', provider.request.user_prompt)
+        self.assertIn('"映射编号":"S23-RFS-001"', provider.request.user_prompt)
+        self.assertIn('"评论证据编号":["C1"]', provider.request.user_prompt)
+
     def test_graph_snapshot_deduplicates_requirements_and_maps_specific_functions(self) -> None:
         graph = GenerationService._build_graph_snapshot(
             "为适老智能药盒优化提醒、收纳与外观体验。",

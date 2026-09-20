@@ -51,6 +51,7 @@ class TextProvider(Protocol):
 
 class GenerationService:
     _SEMANTIC_GRAPH_VERSION = "rfs-candidate-v2"
+    _REVIEWED_GRAPH_EVIDENCE_STATUSES = frozenset(("已审核图谱证据", "研究者确认关系证据"))
 
     def __init__(self, repository: KnowledgeRepository, confirmation_secret: bytes) -> None:
         if len(confirmation_secret) < 16:
@@ -139,9 +140,10 @@ class GenerationService:
             industrial_constraints,
         )
         package["requirement_function_structure_graph"] = graph
-        paths = list(graph.get("used_graph_paths") or []) if graph.get("evidence_status") == "已审核图谱证据" else []
+        evidence_status = str(graph.get("evidence_status") or "")
+        paths = list(graph.get("used_graph_paths") or []) if evidence_status in self._REVIEWED_GRAPH_EVIDENCE_STATUSES else []
         if verified_graph_snapshot is not None and (graph.get("approved_mapping_count") != len({p.get('mapping_id') for p in paths}) or not paths):
-            raise ValueError("正式图谱必须包含经实验审核并可追溯的映射路径。")
+            raise ValueError("传入的审核关系必须包含可追溯的映射路径。")
         context.update(semantic_catalog_version="paper-repro-v2.0", actual_algorithm="not_clustered",
                        evidence_count=len(context.get("comments") or context.get("requirements") or []),
                        approved_mapping_count=int(graph.get("approved_mapping_count") or 0), generation_mode="pending",
@@ -154,7 +156,13 @@ class GenerationService:
                        independent_evaluation_completed=False, closed_loop_validated=False,
                        used_graph_paths=paths,
                        graph_evidence_status=graph.get("evidence_status", "无正式图谱证据"))
-        graph_label = "已审核正式图谱" if paths else "候选设计推导（无正式图谱证据）"
+        graph_label = (
+            "研究者确认关系证据"
+            if evidence_status == "研究者确认关系证据" and paths
+            else "已审核正式图谱"
+            if paths
+            else "候选设计推导（无正式图谱证据）"
+        )
         system_prompt = (
             "你是工业设计研究专家。必须保留输入中的评论证据编号和需求—功能—结构关系，"
             "输出可执行的中文概念方案。不得将候选关系、概念功能或用户确认事件写成已实现、已验证的产品事实。"
@@ -245,11 +253,13 @@ class GenerationService:
                 continue
             links.append(
                 {
+                    "映射编号": str(item.get("mapping_id") or "未记录"),
                     "需求": clip(item.get("requirement"), 100),
                     "功能候选": clip(item.get("function"), 180),
                     "结构候选": clip(item.get("structure"), 180),
                     "依据摘要": clip(item.get("evidence"), 220),
-                    "审核状态": str(graph.get("review_status") or "未记录"),
+                    "评论证据编号": list(item.get("comment_ids") or []),
+                    "审核状态": str(item.get("review_status") or graph.get("review_status") or "未记录"),
                 }
             )
         constraints = {
