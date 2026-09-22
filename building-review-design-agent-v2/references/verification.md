@@ -56,6 +56,7 @@ streamlit run app.py --global.developmentMode=false --server.headless=true
 | 评论/需求 | 文件与评论指纹去重、可选评分/日期/版本/渠道/用户标签、证据归属、空结果、特殊字符 |
 | 历史/资产 | 产品隔离、状态/模型/有图筛选、运行评审 upsert、两版本对比、证据追溯、按需文件加载、ZIP 下载、安全恢复时指定产品 |
 | 文本/图片 provider | 无 Key、超时、有限重试、脱敏、离线标识、付费二次确认、幂等锁 |
+| 提示词与历史评论隔离 | 新建文字与图像提示词仅保留评论编号、批次和排序信息，不含原始评论正文。设计、Prompt 与历史预览清除旧记录中的评论正文，并提供仅含提示词的下载。 |
 | 导航/功能 | 10 个页面无异常、10 个旧阶段恰好映射一次、结果与效果图入口仍在 |
 | 论文实验 | tests.v2.test_research_dataset / test_research_evaluation / test_research_service / test_research_ui：清洗守恒、稳定 ID、脱敏、无隐式算法替换、同一 test ID、公认手算指标、无训练泄漏、非法/重复/缺失输入拒绝、专家与用户分组、n<2 标准差为空、私有存档/哈希/重开/复现、无人工数据不声称准确率，桌面/手机界面检查 |
 | 旧规则自检 | tests.test_evaluation_honesty、tests.test_ai_generation_outputs：空材料分数 0，四个旧列兼容且新增来源列，DOCX/优化提示不冒充专家结论 |

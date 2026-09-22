@@ -27,10 +27,7 @@ def _requirement_summary(context: dict[str, Any] | None) -> str:
         if not isinstance(item, dict):
             continue
         title = _text(item.get("title"))
-        description = _text(item.get("description"))
-        if title and description:
-            lines.append(f"{title}：{description}")
-        elif title:
+        if title:
             lines.append(title)
     return "；".join(lines)
 

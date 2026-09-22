@@ -172,9 +172,9 @@ class GenerationService:
         context["text_input_budget"] = {
             "max_characters": 12_000,
             "actual_characters": len(user_prompt),
-            "comment_limit": len(text_input["评论证据"]),
+            "comment_limit": len(text_input["评论来源标识"]),
             "requirement_limit": len(text_input["候选需求"]),
-            "retrieval": "关键词得分排序，保留编号与截断片段",
+            "retrieval": "关键词得分排序，保留编号、批次与排序得分，不含评论正文",
         }
         text_result = text_provider.generate(
             TextGenerationRequest(
@@ -231,7 +231,6 @@ class GenerationService:
                     "评论编号": str(item.get("id") or "未记录"),
                     "来源批次": str(item.get("batch_id") or "未记录"),
                     "检索得分": item.get("score") if item.get("score") is not None else "未记录",
-                    "评论片段": clip(item.get("comment_original"), 320),
                 }
             )
         requirements = []
@@ -242,7 +241,6 @@ class GenerationService:
                 {
                     "需求编号": str(item.get("id") or "未记录"),
                     "需求名称": clip(item.get("title"), 100),
-                    "候选说明": clip(item.get("description"), 260),
                     "触发词": clip(item.get("keywords"), 180),
                     "检索得分": item.get("score") if item.get("score") is not None else "未记录",
                 }
@@ -257,7 +255,6 @@ class GenerationService:
                     "需求": clip(item.get("requirement"), 100),
                     "功能候选": clip(item.get("function"), 180),
                     "结构候选": clip(item.get("structure"), 180),
-                    "依据摘要": clip(item.get("evidence"), 220),
                     "评论证据编号": list(item.get("comment_ids") or []),
                     "审核状态": str(item.get("review_status") or graph.get("review_status") or "未记录"),
                 }
@@ -279,7 +276,7 @@ class GenerationService:
                 "图谱状态": graph_label,
                 "已审核图谱路径": list(graph.get("used_graph_paths") or []),
             },
-            "评论证据": comments,
+            "评论来源标识": comments,
             "候选需求": requirements,
             "需求功能结构候选": links,
             "设计约束": constraints,

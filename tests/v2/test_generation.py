@@ -61,8 +61,9 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertNotIn("test-confirmation-secret", repr(preview))
 
     def test_design_generation_uses_private_evidence_and_persists_text_mode(self) -> None:
+        raw_comment = "提醒声音太小，老人听不清"
         imported = self.repo.ingest_comments(
-            "智能药盒", "适老健康", "comments.csv", ["提醒声音太小，老人听不清"]
+            "智能药盒", "适老健康", "comments.csv", [raw_comment]
         )
         self.repo.add_requirement_once(
             imported.product_id,
@@ -95,6 +96,8 @@ class GenerationServiceTests(unittest.TestCase):
             item["prompt"] for item in visual_assets if item["key"] == "exploded"
         ).lower())
         self.assertIsNotNone(self.repo.get_generation_run(run.id))
+        self.assertNotIn(raw_comment, generated.package["industrial_design_prompt"])
+        self.assertTrue(all(raw_comment not in prompt for prompt in generated.package["image_prompts"]))
 
     def test_design_generation_uses_a_bounded_traceable_text_input(self) -> None:
         imported = self.repo.ingest_comments(
@@ -118,6 +121,7 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertLessEqual(len(provider.request.user_prompt), 12_000)
         self.assertIn('"评论编号"', provider.request.user_prompt)
         self.assertIn('"需求编号"', provider.request.user_prompt)
+        self.assertNotIn("很长的历史评论", provider.request.user_prompt)
         self.assertNotIn("冗长元数据" * 100, provider.request.user_prompt)
         self.assertEqual(generated.context["text_input_budget"]["max_characters"], 12_000)
         self.assertLessEqual(generated.context["text_input_budget"]["actual_characters"], 12_000)
