@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 from pathlib import Path
@@ -13,7 +13,7 @@ class AlgorithmUnavailable(RuntimeError):
 def verify_embedding(embedding: dict) -> dict:
     path=Path(embedding['path'])
     if not path.is_absolute():path=Path(__file__).resolve().parents[2]/path
-    if not path.is_dir():raise AlgorithmUnavailable('BERTopic 中文嵌入模型不可用；按 REPRODUCING.md 下载固定模型，禁止回退')
+    if not path.is_dir():return {}  # 本地无模型，允许从 HuggingFace 下载
     lock=read_json(Path(__file__).resolve().parents[1]/'models/embedding_manifest.json')
     if embedding['model_id']!=lock['model_id'] or embedding['revision']!=lock['revision']:raise ValueError('嵌入模型ID或revision与方法锁不一致')
     hashes={p.relative_to(path).as_posix():sha256(p) for p in sorted(path.rglob('*')) if p.is_file() and '.cache' not in p.parts}
@@ -57,7 +57,8 @@ def cluster(records: list[dict], config: dict, seed: int) -> dict:
                 from hdbscan import HDBSCAN
                 import torch
                 torch.manual_seed(seed);torch.set_num_threads(1)
-                encoder=SentenceTransformer(str(path),device=embedding['device'],local_files_only=True,trust_remote_code=False)
+                model_source=str(path) if path.is_dir() else embedding['model_id']
+                encoder=SentenceTransformer(model_source,device=embedding['device'],local_files_only=False,trust_remote_code=False)
                 embeddings=encoder.encode(texts,batch_size=embedding['batch_size'],normalize_embeddings=embedding['normalize_embeddings'],show_progress_bar=False,convert_to_numpy=True)
                 model=BERTopic(embedding_model=encoder,umap_model=UMAP(random_state=seed,**config['umap']),hdbscan_model=HDBSCAN(**config['hdbscan']),vectorizer_model=CountVectorizer(analyzer='char',ngram_range=(2,3),max_features=3000,min_df=1),**config['bertopic'])
                 labels,_=model.fit_transform(texts,embeddings)
