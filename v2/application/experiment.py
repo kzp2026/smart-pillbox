@@ -1,4 +1,4 @@
-"""Adapter from the reproducible paper runner to V2 private history/storage."""
+﻿"""Adapter from the reproducible paper runner to V2 private history/storage."""
 from __future__ import annotations
 
 import copy
@@ -88,7 +88,7 @@ class ExperimentService:
                 manifest = json.loads((run / "run_manifest.json").read_text(encoding="utf-8"))
                 self._persist(pipeline.id, cfg, run, manifest, requested_stop=stop_after)
             self.repository.update_pipeline_run(pipeline.id, RunStatus.FAILED,
-                                                current_stage="experiment", error_summary="本地论文实验失败，请检查输入与配置。")
+                                                current_stage="experiment", error_summary=f"本地论文实验失败：{type(exc).__name__}: {str(exc)[:500]}")
             self._invalidate()
             raise
 
