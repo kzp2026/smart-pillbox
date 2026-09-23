@@ -1,4 +1,4 @@
-"""Streamlit controls for the formal reproducible experiment runner."""
+﻿"""Streamlit controls for the formal reproducible experiment runner."""
 from __future__ import annotations
 
 import copy
@@ -96,6 +96,7 @@ def render_experiment(st, repository, store, active_product: str = "") -> None:
                     input_path = _write_upload(root, source, "comments")
                 config = copy.deepcopy(load_research_config() if mode == "research" else load_example_config())
                 config["product_name"] = product.strip()
+                config["ordinary_requirements"] = f"为适老化场景设计{product.strip()}。"
                 config["cleaning"]["comment_column"] = comment_column
                 config["topic"]["algorithm"] = algorithm
                 result = service.run(config, input_path,
