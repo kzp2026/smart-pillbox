@@ -53,6 +53,7 @@ REQUIRED_PATHS = (
     "v2/application/view_cache.py",
     "v2/application/image_jobs.py",
     "v2/application/generation_jobs.py",
+    "v2/application/prompt_sanitizer.py",
     "v2/application/runtime_state.py",
     "v2/application/visual_quality.py",
     "v2/application/research.py",
@@ -82,6 +83,7 @@ REQUIRED_PATHS = (
     "tests/v2/test_view_cache.py",
     "tests/v2/test_image_jobs.py",
     "tests/v2/test_generation_jobs.py",
+    "tests/v2/test_prompt_sanitizer.py",
     "tests/v2/test_visual_quality.py",
     "tests/v2/test_schema_sql.py",
     "docs/V2_MIGRATION.md",
@@ -274,6 +276,14 @@ def verify_static(root: Path) -> list[str]:
     ):
         if marker not in generation_source:
             errors.append(f"V2 入口生成模块解析契约缺少：{marker}")
+
+    prompt_sanitizer_source = (root / "v2/application/prompt_sanitizer.py").read_text(encoding="utf-8")
+    for marker in ("sanitize_visual_prompt", "sanitize_design_text", "评论证据线索"):
+        if marker not in prompt_sanitizer_source:
+            errors.append(f"V2 提示词评论隔离契约缺少：{marker}")
+    product_prompt_source = (root / "scripts/product_knowledge_base.py").read_text(encoding="utf-8")
+    if "评论原文仅保留在私有评论库，不进入图像提示词" not in product_prompt_source:
+        errors.append("V2 图像提示词仍可能写入评论原文。")
 
     history_source = (root / "v2/application/history.py").read_text(encoding="utf-8")
     for marker in ("target_product", "data_mime_prefixes", "read_many"):

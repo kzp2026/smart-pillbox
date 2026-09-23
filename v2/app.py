@@ -32,6 +32,7 @@ from v2.application.image_generation import ImageGenerationService
 from v2.application.image_jobs import ImageJobRegistry
 from v2.application.imports import ImportService
 from v2.application.migration import MigrationService
+from v2.application.prompt_sanitizer import sanitize_design_text, sanitize_visual_prompt
 from v2.application import runtime_state as _runtime_state
 from v2.application.runtime_state import (
     LOGIN_GUARDS as _LOGIN_GUARDS,
@@ -83,7 +84,7 @@ STAGE_NAV_ITEMS = (
     "工业设计 Prompt",
     "AI 效果图",
 )
-NAV_ITEMS = STAGE_NAV_ITEMS + ("论文实验中心", "历史记录", "设置与迁移")
+NAV_ITEMS = STAGE_NAV_ITEMS + ("研究评论库", "论文实验中心", "历史记录", "设置与迁移")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEMAND_DRAFT_KEY = "v2_demand_draft"
 DEMAND_WIDGET_PREFIX = "_v2_demand_"
@@ -1416,7 +1417,7 @@ def _render_graph(st_module: object, history: HistoryService) -> None:
                 "需求": item.get("requirement", ""),
                 "对应功能": item.get("function", ""),
                 "承载结构": item.get("structure", ""),
-                "用户证据": item.get("evidence", ""),
+                "评论证据": "已保留于评论库，可按编号追溯",
             }
             for item in list(graph["links"])
         ],
@@ -1454,7 +1455,7 @@ def _render_design(st_module: object, history: HistoryService) -> None:
         score = f"{detail.quality_score:.1f}" if detail.quality_score else "—"
         st_module.caption(f"自动材料检查状态：{detail.quality_status} · 历史兼容值：{score}（非专家评分）")
     _render_visual_delivery_gate(st_module, detail.result)
-    design_text = str(detail.result.get("design_text") or "")
+    design_text = sanitize_design_text(detail.result.get("design_text"))
     if design_text:
         st_module.markdown(design_text)
         st_module.download_button(
@@ -1491,16 +1492,32 @@ def _render_prompt(st_module: object, history: HistoryService) -> None:
         return
     _render_generation_job_status(st_module, history.repository, detail.run)
     _render_visual_delivery_gate(st_module, detail.result)
-    prompt = str(detail.result.get("industrial_design_prompt") or "")
+    prompt = sanitize_visual_prompt(detail.result.get("industrial_design_prompt"))
     if prompt:
         st_module.code(prompt, language=None, wrap_lines=True)
+        st_module.download_button(
+            "下载工业设计 Prompt",
+            prompt.encode("utf-8"),
+            file_name=f"{_safe_filename(detail.run.target_product)}-工业设计提示词.txt",
+            mime="text/plain",
+            icon=":material/download:",
+        )
     prompts = list(detail.result.get("image_prompts") or [])
     if not prompts:
         st_module.info("该历史记录没有结构化图片 Prompt。")
         return
     for index, item in enumerate(prompts, start=1):
         with st_module.expander(f"图像任务 {index}", expanded=index == 1):
-            st_module.code(str(item), language=None, wrap_lines=True)
+            image_prompt = sanitize_visual_prompt(item)
+            st_module.code(image_prompt, language=None, wrap_lines=True)
+            st_module.download_button(
+                f"下载图像任务 {index} Prompt",
+                image_prompt.encode("utf-8"),
+                file_name=f"{_safe_filename(detail.run.target_product)}-图像任务{index}-提示词.txt",
+                mime="text/plain",
+                icon=":material/download:",
+                key=f"v2_download_image_prompt_{detail.run.id}_{index}",
+            )
 
 
 def _render_visual_delivery_gate(st_module: object, result: Mapping[str, object]) -> None:
@@ -1545,12 +1562,33 @@ def _render_images(
     if not runs:
         st_module.info(f"当前产品“{active}”暂无效果图运行记录，其他产品的历史结果已隐藏。")
         return
+    image_run_ids = _cached_view(
+        repository,
+        "image-run-ids",
+        lambda: repository.list_run_ids_with_images(active),
+        active,
+    )
     known_ids = {run.id for run in runs}
     selected = str(st_module.session_state.get("v2_current_run_id") or "")
-    if selected not in known_ids:
-        selected = runs[0].id
-        st_module.session_state["v2_current_run_id"] = selected
-    run = next(item for item in runs if item.id == selected)
+    archived_runs = [item for item in runs if item.id in image_run_ids]
+    if selected not in known_ids or (selected not in image_run_ids and archived_runs):
+        selected = archived_runs[0].id if archived_runs else runs[0].id
+    run_options = archived_runs + [item for item in runs if item.id not in image_run_ids]
+    selected = st_module.selectbox(
+        "选择已归档效果图运行",
+        [item.id for item in run_options],
+        index=[item.id for item in run_options].index(selected),
+        format_func=lambda run_id: next(
+            f"{item.updated_at[:19].replace('T', ' ')} · {item.status.value} · "
+            f"{'已归档图片' if item.id in image_run_ids else '该运行尚未归档图片'}"
+            for item in run_options
+            if item.id == run_id
+        ),
+    )
+    if selected != st_module.session_state.get("v2_current_run_id"):
+        st_module.session_state.pop("v2_loaded_image_run_id", None)
+    st_module.session_state["v2_current_run_id"] = selected
+    run = next(item for item in run_options if item.id == selected)
     st_module.caption(
         f"当前产品：{run.target_product} · 最近运行：{run.status.value} · "
         f"计划图片 {run.image_count} 张。页面切换不自动读取大图。"
@@ -1788,7 +1826,7 @@ def _render_history(
             )
         if detail.result.get("design_text"):
             with st_module.expander("设计方案预览", expanded=True):
-                st_module.markdown(str(detail.result["design_text"]))
+                st_module.markdown(sanitize_design_text(detail.result["design_text"]))
         if loaded_detail_id == selected_id:
             for artifact in detail.artifacts:
                 with st_module.expander(f"{artifact.name} · {artifact.size_bytes / 1024:.1f} KB"):
@@ -1813,7 +1851,7 @@ def _render_history(
                             f"{compared.run.status.value} · {compared.run.model} · 历史自动自检值 {compared.quality_score:.1f}（非专家评价）"
                         )
                         st_module.write(compared.run.demand_text)
-                        design_excerpt = str(compared.result.get("design_text") or "暂无设计文本")
+                        design_excerpt = sanitize_design_text(compared.result.get("design_text") or "暂无设计文本")
                         st_module.write(design_excerpt[:1200])
 
         with st_module.expander("需求与评论证据", expanded=False):
@@ -2072,6 +2110,9 @@ def main() -> None:
         _render_prompt(st, history)
     elif navigation == "AI 效果图":
         _render_images(st, config, repository, store, history)
+    elif navigation == "研究评论库":
+        from v2.ui.research_comments import render_research_comments
+        render_research_comments(st, repository, _active_product(st))
     elif navigation == "论文实验中心":
         from v2.ui.research import render_research
         render_research(st, repository, store, _active_product(st))

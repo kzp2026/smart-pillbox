@@ -41,10 +41,22 @@ def _uploaded_rows(upload) -> list[dict]:
 
 def _prepare_form(st, repository, store, product):
     st.caption('先确认数据集，再运行实验。来源不明的数据可以做软件测试，但不能直接充当论文实证。')
-    upload=st.file_uploader('上传论文评论数据',type=['csv','xlsx'],key='paper_upload',max_upload_size=50)
+    uploaded_files=st.file_uploader('上传论文评论数据（可多选）',type=['csv','xlsx'],key='paper_upload',accept_multiple_files=True,max_upload_size=50)
     source = None
-    if upload:
-        source = (upload.name,upload.getvalue())
+    if uploaded_files:
+        frames = []
+        file_names = []
+        for f in uploaded_files:
+            try:
+                frames.append(read_upload_table(f.name, f.getvalue()))
+                file_names.append(f.name)
+            except Exception as e:
+                st.warning(f'文件 {f.name} 读取失败：{e}')
+        if frames:
+            import pandas as pd
+            uploaded_frame = pd.concat(frames, ignore_index=True)
+            source = ('+'.join(file_names), None, uploaded_frame)
+            st.caption(f'已上传 {len(uploaded_files)} 个文件，共 {len(uploaded_frame)} 行。')
     with st.expander('或从当前产品历史读取已上传文件'):
         runs=_runs(repository,product) if product.strip() else []
         source_runs=[r for r in runs if r.model=='legacy-pipeline']
@@ -60,10 +72,14 @@ def _prepare_form(st, repository, store, product):
     saved=st.session_state.get('paper_source')
     if source is None and saved and saved[0]==product: source=saved[1:]
     if source is None: return
-    filename,data=source
-    if len(data)>50*1024*1024:
-        st.error('评论文件最大 50 MB。'); return
-    frame=read_upload_table(filename,data)
+    # 兼容两种格式：(filename, data) 或 (filename, data, frame)
+    if len(source) == 3:
+        filename, data, frame = source
+    else:
+        filename, data = source
+        if len(data)>50*1024*1024:
+            st.error('评论文件最大 50 MB。'); return
+        frame=read_upload_table(filename,data)
     st.dataframe(frame.head(10),hide_index=True,use_container_width=True)
     columns=list(frame.columns)
     if not columns: st.error('文件没有列。'); return
@@ -78,7 +94,7 @@ def _prepare_form(st, repository, store, product):
         dedup=st.checkbox('去除清洗后完全重复的评论',value=True)
         st.caption('自动遮盖手机号/邮箱；不保留账号列。公开前仍须人工检查姓名、地址等信息。')
         if st.form_submit_button('准备并检查数据集'):
-            dataset=prepare_dataset(frame,data,filename,mappings,provenance,int(min_length),dedup)
+            dataset=prepare_dataset(frame,data or b'',filename,mappings,provenance,int(min_length),dedup)
             st.session_state['paper_dataset']=dataset
             st.session_state['paper_dataset_product']=product
             st.session_state.pop('paper_result',None)

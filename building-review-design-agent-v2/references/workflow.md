@@ -4,6 +4,8 @@
 
 Before scheduling a paid image job, pass the complete visual asset plan through `v2/application/visual_quality.py`. Preserve one canonical product identity across all eight assets and append the asset-specific contract before handing prompts to the provider. The exploded view must describe an assembly sequence rather than generic floating electronics; the three-view must use aligned orthographic geometry; the board must communicate CMF and the visual story without relying on illegible generated paragraphs; usage scenes must require complete, physically plausible hands. Persist `visual_quality_gate` and per-asset `acceptance_criteria` with the run. The Design and Prompt pages can expose this plan-level gate without loading image data.
 
+Prompt construction uses comment identifiers, retrieval scores and reviewed requirement—function—structure knowledge only. It must never place raw review text in visual prompts or the text-model request. Historical prompt views use `v2/application/prompt_sanitizer.py` to hide legacy embedded review excerpts without modifying the stored run.
+
 Do not claim that the gate has visually accepted provider pixels. A paid real-image review remains a separate owner-confirmed acceptance action.
 
 ## 1. 业务规格固定

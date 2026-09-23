@@ -51,6 +51,7 @@ class TextProvider(Protocol):
 
 class GenerationService:
     _SEMANTIC_GRAPH_VERSION = "rfs-candidate-v2"
+    _REVIEWED_GRAPH_EVIDENCE_STATUSES = frozenset(("已审核图谱证据", "研究者确认关系证据"))
 
     def __init__(self, repository: KnowledgeRepository, confirmation_secret: bytes) -> None:
         if len(confirmation_secret) < 16:
@@ -139,9 +140,10 @@ class GenerationService:
             industrial_constraints,
         )
         package["requirement_function_structure_graph"] = graph
-        paths = list(graph.get("used_graph_paths") or []) if graph.get("evidence_status") == "已审核图谱证据" else []
+        evidence_status = str(graph.get("evidence_status") or "")
+        paths = list(graph.get("used_graph_paths") or []) if evidence_status in self._REVIEWED_GRAPH_EVIDENCE_STATUSES else []
         if verified_graph_snapshot is not None and (graph.get("approved_mapping_count") != len({p.get('mapping_id') for p in paths}) or not paths):
-            raise ValueError("正式图谱必须包含经实验审核并可追溯的映射路径。")
+            raise ValueError("传入的审核关系必须包含可追溯的映射路径。")
         context.update(semantic_catalog_version="paper-repro-v2.0", actual_algorithm="not_clustered",
                        evidence_count=len(context.get("comments") or context.get("requirements") or []),
                        approved_mapping_count=int(graph.get("approved_mapping_count") or 0), generation_mode="pending",
@@ -154,17 +156,26 @@ class GenerationService:
                        independent_evaluation_completed=False, closed_loop_validated=False,
                        used_graph_paths=paths,
                        graph_evidence_status=graph.get("evidence_status", "无正式图谱证据"))
-        graph_label = "已审核正式图谱" if paths else "候选设计推导（无正式图谱证据）"
+        graph_label = (
+            "研究者确认关系证据"
+            if evidence_status == "研究者确认关系证据" and paths
+            else "已审核正式图谱"
+            if paths
+            else "候选设计推导（无正式图谱证据）"
+        )
         system_prompt = (
-                    "你是工业设计研究专家。必须保留输入中的评论证据、需求—功能—结构关系，"
-                    "输出可执行的中文产品设计方案，不得编造不存在的用户证据。"
-                )
-        user_prompt = (
-                    f"目标产品：{command.target_product}\n需求：{command.demand_text}\n"
-                    f"证据上下文：{json.dumps(to_json_safe(context), ensure_ascii=False)}\n"
-                    f"{graph_label}：{json.dumps(to_json_safe(graph), ensure_ascii=False)}\n"
-                    f"离线方案草稿：\n{package.get('design_text', '')}"
-                )
+            "你是工业设计研究专家。必须保留输入中的评论证据编号和需求—功能—结构关系，"
+            "输出可执行的中文概念方案。不得将候选关系、概念功能或用户确认事件写成已实现、已验证的产品事实。"
+        )
+        text_input = self._build_bounded_text_input(command, context, graph, industrial_constraints, graph_label)
+        user_prompt = json.dumps(text_input, ensure_ascii=False, separators=(",", ":"))
+        context["text_input_budget"] = {
+            "max_characters": 12_000,
+            "actual_characters": len(user_prompt),
+            "comment_limit": len(text_input["评论来源标识"]),
+            "requirement_limit": len(text_input["候选需求"]),
+            "retrieval": "关键词得分排序，保留编号、批次与排序得分，不含评论正文",
+        }
         text_result = text_provider.generate(
             TextGenerationRequest(
                 system_prompt=system_prompt,
@@ -180,6 +191,7 @@ class GenerationService:
         context["generation_mode"] = text_result.mode
         package["generation_mode"] = text_result.mode
         package["text_generation_prompt"] = {"system_prompt": system_prompt, "user_prompt": user_prompt}
+        package["text_input_budget"] = context["text_input_budget"]
         package["used_graph_path_ids"] = [str(path.get("path_id") or "") for path in paths]
         safe_context = to_json_safe(context)
         safe_package = to_json_safe(package)
@@ -195,6 +207,80 @@ class GenerationService:
             context=safe_context,
             package=safe_package,
         )
+
+    @staticmethod
+    def _build_bounded_text_input(
+        command: GenerationCommand,
+        context: Mapping[str, object],
+        graph: Mapping[str, object],
+        industrial_constraints: Mapping[str, object],
+        graph_label: str,
+    ) -> dict[str, object]:
+        """Keep model input auditable without serialising an entire comment database."""
+
+        def clip(value: object, maximum: int) -> str:
+            text = str(value or "").strip()
+            return text if len(text) <= maximum else f"{text[:maximum - 1]}…"
+
+        comments = []
+        for item in list(context.get("comments") or [])[:8]:
+            if not isinstance(item, Mapping):
+                continue
+            comments.append(
+                {
+                    "评论编号": str(item.get("id") or "未记录"),
+                    "来源批次": str(item.get("batch_id") or "未记录"),
+                    "检索得分": item.get("score") if item.get("score") is not None else "未记录",
+                }
+            )
+        requirements = []
+        for item in list(context.get("requirements") or [])[:8]:
+            if not isinstance(item, Mapping):
+                continue
+            requirements.append(
+                {
+                    "需求编号": str(item.get("id") or "未记录"),
+                    "需求名称": clip(item.get("title"), 100),
+                    "触发词": clip(item.get("keywords"), 180),
+                    "检索得分": item.get("score") if item.get("score") is not None else "未记录",
+                }
+            )
+        links = []
+        for item in list(graph.get("links") or [])[:8]:
+            if not isinstance(item, Mapping):
+                continue
+            links.append(
+                {
+                    "映射编号": str(item.get("mapping_id") or "未记录"),
+                    "需求": clip(item.get("requirement"), 100),
+                    "功能候选": clip(item.get("function"), 180),
+                    "结构候选": clip(item.get("structure"), 180),
+                    "评论证据编号": list(item.get("comment_ids") or []),
+                    "审核状态": str(item.get("review_status") or graph.get("review_status") or "未记录"),
+                }
+            )
+        constraints = {
+            str(key): clip(value, 240)
+            for key, value in industrial_constraints.items()
+            if str(key).strip() and str(value or "").strip()
+        }
+        return {
+            "任务": {
+                "产品": command.target_product,
+                "设计目标": command.demand_text,
+                "输出要求": "输出概念方案，逐项标注评论证据编号。服药确认只能描述为用户确认事件。",
+            },
+            "检索说明": {
+                "方式": "普通关系表与评论表的关键词得分排序，不是图数据库检索",
+                "返回数量": {"评论": len(comments), "候选需求": len(requirements), "关系": len(links)},
+                "图谱状态": graph_label,
+                "已审核图谱路径": list(graph.get("used_graph_paths") or []),
+            },
+            "评论来源标识": comments,
+            "候选需求": requirements,
+            "需求功能结构候选": links,
+            "设计约束": constraints,
+        }
 
     @staticmethod
     def build_graph_snapshot(

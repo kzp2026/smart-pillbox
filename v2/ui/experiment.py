@@ -49,7 +49,7 @@ def _show_status(st, result: dict) -> None:
 def render_experiment(st, repository, store, active_product: str = "") -> None:
     service = ExperimentService(repository, store)
     st.caption("clean → topics → requirements → mapping → graph → generation → evaluation → report；研究模式可先停在图谱阶段，不产生模型费用。")
-    source = st.file_uploader("评论数据 CSV/XLSX", type=["csv", "xlsx"], key="repro_source")
+    source_files = st.file_uploader("评论数据 CSV/XLSX（可多选）", type=["csv", "xlsx"], key="repro_source", accept_multiple_files=True)
     product = st.text_input("实验产品名", value=active_product, key="repro_product")
     algorithm = st.selectbox("主题算法", ["kmeans_tfidf", "bertopic"], key="repro_algorithm")
     mode = st.selectbox("运行模式", ["test", "research"], key="repro_mode",
@@ -60,14 +60,23 @@ def render_experiment(st, repository, store, active_product: str = "") -> None:
     mapping = st.file_uploader("映射审核文件（可选）", type=["csv", "xlsx", "json"], key="repro_mapping")
     comment_column = None
     columns = []
-    if source is not None:
+    combined_frame = None
+    if source_files:
         try:
             import pandas as pd
-            frame = pd.read_excel(io.BytesIO(source.getvalue())) if source.name.lower().endswith('.xlsx') else pd.read_csv(io.BytesIO(source.getvalue()), encoding='utf-8-sig')
-            columns = [str(column) for column in frame.columns]
+            frames = []
+            for f in source_files:
+                if f.name.lower().endswith('.xlsx'):
+                    frames.append(pd.read_excel(io.BytesIO(f.getvalue())))
+                else:
+                    frames.append(pd.read_csv(io.BytesIO(f.getvalue()), encoding='utf-8-sig'))
+            combined_frame = pd.concat(frames, ignore_index=True)
+            columns = [str(column) for column in combined_frame.columns]
+            st.caption(f'已上传 {len(source_files)} 个文件，共 {len(combined_frame)} 行。')
             comment_column = st.selectbox("评论内容列", columns, index=default_comment_column_index(columns), key="repro_comment_column") if columns else None
         except Exception as exc:
             st.error(public_error_message("无法读取评论文件", exc, guidance="请检查文件格式与表头后重试。"))
+    source = source_files[0] if source_files else None
     if "v2_repro_request_id" not in st.session_state:
         st.session_state["v2_repro_request_id"] = uuid.uuid4().hex
     if st.button("新建实验请求", help="生成新的请求编号；相同请求编号的重复提交会返回原运行。"):
@@ -76,11 +85,15 @@ def render_experiment(st, repository, store, active_product: str = "") -> None:
         st.session_state.pop("v2_repro_download", None)
         st.rerun()
     action_label = "准备研究材料（停在图谱）" if mode == "research" else "运行测试复现实验"
-    if st.button(action_label, type="primary", disabled=source is None or not product.strip() or not comment_column):
+    if st.button(action_label, type="primary", disabled=not source_files or not product.strip() or not comment_column):
         try:
             with tempfile.TemporaryDirectory(prefix="v2-repro-input-") as temporary:
                 root = Path(temporary)
-                input_path = _write_upload(root, source, "comments")
+                if combined_frame is not None:
+                    input_path = root / "comments.csv"
+                    combined_frame.to_csv(input_path, index=False, encoding='utf-8-sig')
+                else:
+                    input_path = _write_upload(root, source, "comments")
                 config = copy.deepcopy(load_research_config() if mode == "research" else load_example_config())
                 config["product_name"] = product.strip()
                 config["cleaning"]["comment_column"] = comment_column

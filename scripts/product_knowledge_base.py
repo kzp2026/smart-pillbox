@@ -186,13 +186,12 @@ def ensure_visual_asset_constraints(target_product: str, assets: list[dict]) -> 
 
 def build_visual_identity_lock(target_product: str, demand_text: str, requirements: list[dict], comments: list[dict]) -> str:
     requirement_text = "；".join(clean_text(item.get("title", "")) for item in requirements[:4] if item.get("title"))
-    evidence_text = "；".join(clean_text(item.get("comment_original", "")) for item in comments[:2] if item.get("comment_original"))
     return (
         f"统一产品设计锁定：所有设计图片必须表现同一款“{target_product}”，只能改变镜头视角、拆解方式、展板排版和使用场景，"
         "不得改变产品本体；保持同一轮廓、同一主色、同一材料质感、同一关键部件数量、同一尺寸比例、同一操作区域。"
         f"目标需求：{demand_text or target_product}。"
-        f"关键需求证据：{requirement_text or '安全、易用、稳定、符合目标用户痛点'}。"
-        f"评论证据线索：{evidence_text[:220] or '暂无更多评论证据'}。"
+        f"关键需求：{requirement_text or '安全、易用、稳定、符合目标用户痛点'}。"
+        "评论原文仅保留在私有评论库，不进入图像提示词。"
         f"负向约束：{product_visual_constraints(target_product)}"
         "通用质量要求：photorealistic industrial design visualization, ultra realistic 3D product render, no logo, no watermark, no collage, no contact sheet, no unrelated object."
     )
@@ -706,17 +705,9 @@ def generate_design_package(
 
     requirement_lines = []
     for item in requirements:
-        requirement_lines.append(
-            f"- {item.get('title', '用户需求')}：{item.get('description', '')}（证据：{item.get('evidence_text', '')}）"
-        )
+        requirement_lines.append(f"- {item.get('title', '用户需求')}")
     if not requirement_lines:
         requirement_lines.append("- 暂无足够历史需求证据，以下方案仅按当前需求进行初步推导。")
-
-    evidence_lines = []
-    for item in comments:
-        evidence_lines.append(f"- 来自{item.get('product_name', '历史产品')}：{item.get('comment_original', '')}")
-    if not evidence_lines:
-        evidence_lines.append("- 暂无可引用的原始评论。")
 
     similar_names = "、".join(dict.fromkeys(str(item.get("name", "")) for item in products if item.get("name"))) or "暂无"
     design_text = f"""# {target_product} 产品设计方案
@@ -727,25 +718,22 @@ def generate_design_package(
 ## 二、知识库参考范围
 系统从历史产品评论库中检索到的相似产品包括：{similar_names}。
 
-## 三、评论证据
-{chr(10).join(evidence_lines)}
-
-## 四、核心需求转译
+## 三、核心需求转译
 {chr(10).join(requirement_lines)}
 
-## 五、产品定位
-建议将{target_product}定位为“以真实评论证据驱动的用户体验优化型产品”。设计重点不是堆叠功能，而是优先解决评论中反复出现的痛点，并把功能、结构和交互反馈保持一致。
+## 四、产品定位
+建议将{target_product}定位为“以用户需求转译驱动的体验优化型产品”。设计重点不是堆叠功能，而是优先解决已识别需求，并把功能、结构和交互反馈保持一致。
 
-## 六、功能方案
+## 五、功能方案
 1. 核心功能围绕当前需求“{demand_text or target_product}”展开，优先提供明确、可感知、低学习成本的主功能。
-2. 辅助功能从历史评论高频痛点中提取，避免与目标场景无关的功能膨胀。
+2. 辅助功能从已识别需求中提取，避免与目标场景无关的功能膨胀。
 3. 对适老、家庭、健康、安全等场景，优先考虑大字体、强提醒、防误操作和易清洁结构。
 
-## 七、结构与材料建议
+## 六、结构与材料建议
 结构上采用模块化主体、清晰交互区和可维护部件。材料建议优先选择耐用、易清洁、触感温和的方案，并根据目标产品的真实使用环境控制体积、重量和成本。
 
-## 八、验证结论
-本方案已保留历史评论证据链。后续生成效果图时，应保持同一产品主体、同一结构语言和同一用户场景，避免生成与目标产品无关的外观。
+## 七、验证结论
+原始评论保留在私有评论库中，可按稳定编号追溯。后续生成效果图时，应保持同一产品主体、同一结构语言和同一用户场景，避免生成与目标产品无关的外观。
 """
 
     industrial_design_prompt, normalized_constraints = build_industrial_design_prompt(
